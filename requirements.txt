@@ -1,0 +1,7 @@
+tonic
+numpy
+matplotlib
+snntorch
+torch
+torchvision
+ipykernel
