@@ -3,10 +3,10 @@ import torch.nn as nn
 
 import snntorch as snn
 
-class basicSNN(nn.Module):
+class BasicSNN(nn.Module):
     '''Simple convolutional SNN, meant to operate on two channels of on and off events, with 128 x 128 resolution.'''
     def __init__(self, num_classes=11, num_channels=2, beta=0.9, threshold=1.0):
-        super(basicSNN, self).__init__()
+        super(BasicSNN, self).__init__()
         self.conv1 = nn.Conv2d(num_channels, 32, kernel_size=3, stride=1, padding=1)
         self.lif1 = snn.Leaky(beta=beta, threshold=threshold)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
