@@ -5,3 +5,4 @@ snntorch
 torch
 torchvision
 ipykernel
+python-dotenv
