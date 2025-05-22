@@ -1,3 +1,4 @@
+python-dotenv
 tonic
 numpy
 matplotlib
@@ -5,4 +6,9 @@ snntorch
 torch
 torchvision
 ipykernel
-python-dotenv
+pandas
+pillow
+opencv-python
+tqdm
+ttach
+scikit-learn
