@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import numpy as np
 
 def plot_frames(frames):
     n_frames = len(frames)
@@ -21,4 +22,67 @@ def plot_combined_frames(combined_frames):
         ax[i].imshow(combined_frame, cmap='gray')
         ax[i].set_title(f"Combined Polarity {i}")
         ax[i].axis('off')
+    plt.show()
+
+def plot_cams(cams, class_idx=0, frames=None, timesteps=None,
+              cmap='jet', alpha=0.5, vmin=0.0, vmax=1.0):
+    """
+    Plot a sequence of class-activation maps as heatmaps, optionally
+    overlayed on original grayscale frames.
+
+    Args:
+      cams         : numpy array or torch tensor
+                     shape (T, C, H, W) or (T, H, W) if already selected class
+      class_idx    : which class channel to plot (ignored if cams is 3D)
+      frames       : optional list/array of grayscale images shape (T, H, W)
+      timesteps    : list of timestep indices to plot (default all)
+      cmap         : colormap for heatmap
+      alpha        : overlay alpha (only used if frames is not None)
+      vmin, vmax   : heatmap scale (for comparability across timesteps)
+    """
+    # Squeeze away if it has a singleton batch dimension
+    if cams.ndim == 5:
+        cams = cams.squeeze(0)
+    # convert to numpy
+    if hasattr(cams, 'cpu'):
+        cams = cams.cpu().detach().numpy()
+    # select class if needed
+    if cams.ndim == 4:
+        # shape (T, C, H, W)
+        cams = cams[:, class_idx, ...]
+    T, H, W = cams.shape
+
+    # choose timesteps
+    if timesteps is None:
+        indices = list(range(T))
+    else:
+        indices = [t for t in timesteps if 0 <= t < T]
+
+    n = len(indices)
+    # decide grid: if overlay, two rows; else one
+    nrows = 2 if frames is not None else 1
+    fig, axes = plt.subplots(nrows, n, figsize=(n * 3, nrows * 3))
+    axes = np.atleast_2d(axes)
+
+    for col, t in enumerate(indices):
+        heat = cams[t]
+        ax_heat = axes[-1, col]
+        im = ax_heat.imshow(heat, cmap=cmap, vmin=vmin, vmax=vmax)
+        ax_heat.set_title(f"t={t}")
+        ax_heat.axis('off')
+
+        if frames is not None:
+            frame = frames[t]
+            ax_frame = axes[0, col]
+            ax_frame.imshow(frame, cmap='gray')
+            ax_frame.axis('off')
+            # overlay
+            ax_frame.imshow(heat, cmap=cmap, alpha=alpha, vmin=vmin, vmax=vmax)
+
+    # colorbar on the last column of heatmaps
+    fig.subplots_adjust(right=0.8)
+    cbar_ax = fig.add_axes([0.82, 0.15, 0.005, 0.7])  # [left, bottom, width, height]
+    cbar = fig.colorbar(im, cax=cbar_ax)
+    cbar.set_label('Activation')
+
     plt.show()

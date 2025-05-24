@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from src.snn_utils import compute_raw_mem, compute_delta_raw_mem
 
@@ -63,13 +64,12 @@ class TemporalScoreCAM:
             weights = torch.cat(weights, dim=2) # (BATCH, TIME, NUM_CHANNELS, NUM_CLASSES)
             return weights
 
-    def generate_cam(self, input_tensor, target_layer):
+    def generate_cam_(self, input_tensor, target_layer):
         '''
         Generate the CAM for the specified targets
         
         input_tensor -> input into the network, b, t, c, h, w
         target_layer -> the layer we are interested in
-        targets -> the target class indices (optional)
         
         returns CAM of shape (batch_size, timesteps, height, width)
         '''
@@ -103,7 +103,32 @@ class TemporalScoreCAM:
                 cams[:, :, c] = (class_cams - mins) / (maxs - mins + 1e-8) # (B, T, H', W')
             
             return cams
+    
+    def rescale_cams(self, cams, input_tensor):
+        B, T, Cc, Hf, Wf = cams.shape
+        H0, W0 = input_tensor.shape[-2:]
+        # reshape to (B*T, Cc, H', W') for interpolation
+        cams = cams.view(B * T, Cc, Hf, Wf)
+        # bilinear upsample to original H0×W0
+        cams = F.interpolate(cams, size=(H0, W0), mode='bilinear', align_corners=False)
+        # back to (B, T, Cc, H0, W0)
+        cams = cams.view(B, T, Cc, H0, W0)
+        return cams
+
+    def generate_cam(self, input_tensor, target_layer):
+        '''
+        Generate the CAM for the specified targets
         
+        input_tensor -> input into the network, b, t, c, h, w
+        target_layer -> the layer we are interested in
+        targets -> the target class indices (optional)
+        
+        returns CAM of shape (batch_size, timesteps, height, width)
+        '''
+        cams = self.generate_cam_(input_tensor, target_layer)
+        cams = self.rescale_cams(cams, input_tensor)
+        return cams
+
     def compute_channel_deltas(self, masked_input):
         '''
         computer the delta in cumulative membrane potential between timesteps for all classification targets
@@ -202,8 +227,8 @@ if __name__ == "__main__":
             return True
         
         # Test generate_cam
-        def test_generate_cam():
-            cams = score_cam.generate_cam(input_tensor, target_layer)
+        def test_generate_cam_():
+            cams = score_cam.generate_cam_(input_tensor, target_layer)
             print(f"CAM shape: {cams.shape}")
             b, t, cc, hc, wc = score_cam.extract_activations(input_tensor, target_layer).shape
             # CAMs should be (batch_size, timesteps, num_classes, height', width')
@@ -219,11 +244,32 @@ if __name__ == "__main__":
             assert torch.all((cams >= 0) & (cams <= 1))
             return True
         
+        def test_rescale_cams():
+            cams = score_cam.generate_cam_(input_tensor, target_layer)
+            rescaled_cams = score_cam.rescale_cams(cams, input_tensor)
+            print(f"Rescaled CAM shape: {rescaled_cams.shape}")
+            # Rescaled CAMs should have the same shape as input_tensor
+            assert rescaled_cams.shape == (batch_size, timesteps, num_classes, height, width)
+            return True
+
+        def test_generate_cam():
+            cams = score_cam.generate_cam(input_tensor, target_layer)
+            print(f"Generated CAM shape: {cams.shape}")
+            # Generated CAMs should have the same shape as rescaled_cams
+            assert cams.shape == (batch_size, timesteps, num_classes, height, width)
+            # Check if CAMs are non-negative
+            assert torch.all(cams >= 0)
+            # Values should be between 0 and 1 after normalization
+            assert torch.all((cams >= 0) & (cams <= 1))
+            return True
+
         # Run all tests
         tests = [
             ("extract_activations", test_extract_activations),
             ("compute_channel_deltas", test_compute_channel_deltas),
             ("get_cam_weights", test_get_cam_weights),
+            ("generate_cam", test_generate_cam_),
+            ("rescale_cams", test_rescale_cams),
             ("generate_cam", test_generate_cam)
         ]
         
