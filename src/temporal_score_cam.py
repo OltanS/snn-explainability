@@ -23,28 +23,13 @@ class TemporalScoreCAM:
 
         returns the cumulative membrane potential change for each channel for all classes for all timesteps.
         '''
+        input_channels = input_tensor.shape[2]  # Input channels
         with torch.no_grad():
-            upsample = nn.UpsamplingBilinear2d(size=input_tensor.shape[-2:]) # last two dimensions are height and width
             activations = self.extract_activations(input_tensor, target_layer)
             batch_size, timesteps, num_channels, _, _ = activations.shape # something like , B, T, 64, 14, 14 whatever
-            input_channels = input_tensor.shape[2]  # Input channels
-
-            upsampled_activations = []
-            # don't upsample the time dimension
-            for t in range(timesteps):
-                act_t = activations[:, t] 
-                ups_t = upsample(act_t)
-
-                # normalize the activations
-                mins = ups_t.view(batch_size, num_channels, -1).min(dim=2, keepdim=True)[0].unsqueeze(-1)
-                maxs = ups_t.view(batch_size, num_channels, -1).max(dim=2, keepdim=True)[0].unsqueeze(-1)
-                normalized = (ups_t - mins) / (maxs - mins + 1e-8)
-                upsampled_activations.append(normalized)
-            
-            upsampled_activations = torch.stack(upsampled_activations, dim=1) # b, t, c, h, w
+            upsampled_activations = self.upsample_activations(activations, input_tensor, normalize=True)
 
             weights = []
-
             CHANNEL_BATCH_SIZE = 16
             for c_batch_idx in range(0, num_channels, CHANNEL_BATCH_SIZE):
                 c_end_idx = min(c_batch_idx + CHANNEL_BATCH_SIZE, num_channels)
@@ -102,7 +87,7 @@ class TemporalScoreCAM:
                 maxs = maxs.view(batch_size, 1, 1, 1)  # (B, 1, 1, 1)
                 cams[:, :, c] = (class_cams - mins) / (maxs - mins + 1e-8) # (B, T, H', W')
             
-            return cams
+            return cams # (B, T, NUM_CLASSES, H', W')
     
     def rescale_cams(self, cams, input_tensor):
         B, T, Cc, Hf, Wf = cams.shape
@@ -116,18 +101,9 @@ class TemporalScoreCAM:
         return cams
 
     def generate_cam(self, input_tensor, target_layer):
-        '''
-        Generate the CAM for the specified targets
-        
-        input_tensor -> input into the network, b, t, c, h, w
-        target_layer -> the layer we are interested in
-        targets -> the target class indices (optional)
-        
-        returns CAM of shape (batch_size, timesteps, height, width)
-        '''
         cams = self.generate_cam_(input_tensor, target_layer)
         cams = self.rescale_cams(cams, input_tensor)
-        return cams
+        return cams # (B, T, NUM_CLASSES, H0, W0)
 
     def compute_channel_deltas(self, masked_input):
         '''
@@ -158,6 +134,26 @@ class TemporalScoreCAM:
         # remove the hook
         handle.remove()
         return torch.stack(activations, dim=1) # (BATCH, TIME, NUM_CHANNELS, HEIGHT, WIDTH)
+
+    def upsample_activations(self, activations, target_tensor, normalize=True):
+        with torch.no_grad():
+            batch_size, timesteps, num_channels, _, _ = activations.shape
+            # bilinear upsample to the spatial size of target_tensor
+            upsample = nn.UpsamplingBilinear2d(size=target_tensor.shape[-2:])
+            upsampled_activations = []
+            for t in range(timesteps):
+                act_t = activations[:, t]           # (B, C, h', w')
+                ups_t = upsample(act_t)             # (B, C, H, W)
+                if normalize:
+                    # per‐channel min/max over spatial dims
+                    flat = ups_t.view(batch_size, num_channels, -1)
+                    mins = flat.min(2, keepdim=True)[0].view(batch_size, num_channels, 1, 1)
+                    maxs = flat.max(2, keepdim=True)[0].view(batch_size, num_channels, 1, 1)
+                    ups_t = (ups_t - mins) / (maxs - mins + 1e-8)
+                # append whether normalized or not
+                upsampled_activations.append(ups_t)
+            # stack back into (B, T, C, H, W)
+            return torch.stack(upsampled_activations, dim=1)
 
 # unit tests
 if __name__ == "__main__":

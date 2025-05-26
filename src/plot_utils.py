@@ -26,20 +26,8 @@ def plot_combined_frames(combined_frames):
 
 def plot_cams(cams, class_idx=0, frames=None, timesteps=None,
               cmap='jet', alpha=0.5, vmin=0.0, vmax=1.0):
-    """
-    Plot a sequence of class-activation maps as heatmaps, optionally
-    overlayed on original grayscale frames.
-
-    Args:
-      cams         : numpy array or torch tensor
-                     shape (T, C, H, W) or (T, H, W) if already selected class
-      class_idx    : which class channel to plot (ignored if cams is 3D)
-      frames       : optional list/array of grayscale images shape (T, H, W)
-      timesteps    : list of timestep indices to plot (default all)
-      cmap         : colormap for heatmap
-      alpha        : overlay alpha (only used if frames is not None)
-      vmin, vmax   : heatmap scale (for comparability across timesteps)
-    """
+    
+    # B, T, NUM_CLASSES, H, W
     # Squeeze away if it has a singleton batch dimension
     if cams.ndim == 5:
         cams = cams.squeeze(0)
@@ -56,7 +44,7 @@ def plot_cams(cams, class_idx=0, frames=None, timesteps=None,
     if timesteps is None:
         indices = list(range(T))
     else:
-        indices = [t for t in timesteps if 0 <= t < T]
+        indices = [t for t in range(timesteps) if 0 <= t < T]
 
     n = len(indices)
     # decide grid: if overlay, two rows; else one
@@ -69,13 +57,13 @@ def plot_cams(cams, class_idx=0, frames=None, timesteps=None,
         ax_heat = axes[-1, col]
         im = ax_heat.imshow(heat, cmap=cmap, vmin=vmin, vmax=vmax)
         ax_heat.set_title(f"t={t}")
-        ax_heat.axis('off')
+        # ax_heat.axis('off')
 
         if frames is not None:
             frame = frames[t]
             ax_frame = axes[0, col]
             ax_frame.imshow(frame, cmap='gray')
-            ax_frame.axis('off')
+            #ax_frame.axis('off')
             # overlay
             ax_frame.imshow(heat, cmap=cmap, alpha=alpha, vmin=vmin, vmax=vmax)
 
@@ -83,6 +71,18 @@ def plot_cams(cams, class_idx=0, frames=None, timesteps=None,
     fig.subplots_adjust(right=0.8)
     cbar_ax = fig.add_axes([0.82, 0.15, 0.005, 0.7])  # [left, bottom, width, height]
     cbar = fig.colorbar(im, cax=cbar_ax)
-    cbar.set_label('Activation')
-
+    cbar.set_label('Activation') 
     plt.show()
+
+
+def plot_activations(activations, frames=None, timesteps=None,
+              cmap='jet', alpha=0.5, vmin=0.0, vmax=1.0):
+    '''
+    activations are: b, t, num_channels, h, w
+    plot_cams takes b, t, num_classes, h, w, with a target class index.
+
+    If we're plotting one channel at a time, we can set the class index to 0, as a hack to reuse the function.
+    '''
+
+    plot_cams(activations, class_idx=0, frames=frames, timesteps=timesteps,
+              cmap=cmap, alpha=alpha, vmin=vmin, vmax=vmax)
