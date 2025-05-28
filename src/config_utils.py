@@ -16,5 +16,6 @@ def setup_config_dictionary(env_path="config.env"):
                 fallback_path = Path.cwd() / dir_name
                 fallback_path.mkdir(exist_ok=True)
                 all_keys[key] = str(fallback_path)
-
+    all_keys["LOCAL_RANK"] = int(os.getenv("LOCAL_RANK", 0))
+    all_keys["GLOBAL_RANK"] = int(os.getenv("RANK", 0))
     return all_keys
