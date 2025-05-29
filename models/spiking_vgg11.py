@@ -4,110 +4,83 @@ import torch.nn as nn
 import snntorch as snn
 from snntorch import utils
 
-
-class BatchNormTT2dFixed(nn.Module):
-    '''Original is missing forward function for modulelist'''
-
-    def __init__(self, input_features, time_steps):
-        super(BatchNormTT2dFixed, self).__init__()
-        self.batchnorm = snn.BatchNormTT2d(input_features, time_steps=time_steps)
-
-    def forward(self, x):
-        for layer in self.batchnorm:
-            x = layer(x)
+class SpikingConvBlock(nn.Module):
+    def __init__(self, in_ch, out_ch, time_steps, beta):
+        super().__init__()
+        self.conv = nn.Conv2d(in_ch, out_ch, 3, padding=1)
+        self.bn   = snn.BatchNormTT2d(out_ch, time_steps)
+        self.lif  = snn.Leaky(beta=beta, init_hidden=True)
+    def forward(self, x, t):
+        x = self.conv(x)
+        x = self.bn[t](x)
+        x = self.lif(x)
         return x
-    
+
     def reset(self):
-        # Reset each bn module as needed.
-        for bn in self.batchnorm:
-            if hasattr(bn, "reset"):
-                bn.reset()        
+        self.lif.reset_hidden()
+        self.lif.detach_hidden()
 
-class BatchNormTT1dFixed(nn.Module):
-    '''Original is missing forward function for modulelist'''
+class SpikingClassifier(nn.Module):
+    def __init__(self, num_classes, time_steps, beta):
+        super().__init__()
+        self.fc1  = nn.Linear(512 * 2 * 2, 4096)
+        self.bn1  = snn.BatchNormTT1d(4096, time_steps)
+        self.lif1 = snn.Leaky(beta=beta, init_hidden=True)
+        self.fc2  = nn.Linear(4096, num_classes)
 
-    def __init__(self, input_features, time_steps):
-        super(BatchNormTT1dFixed, self).__init__()
-        self.batchnorm = snn.BatchNormTT1d(input_features, time_steps=time_steps)
-
-    def forward(self, x):
-        for layer in self.batchnorm:
-            x = layer(x)
+    def forward(self, x, t):
+        x = self.fc1(x)
+        x = self.bn1[t](x)
+        x = self.lif1(x)
+        x = self.fc2(x)
         return x
-    
+
     def reset(self):
-        # Reset each bn module as needed.
-        for bn in self.batchnorm:
-            if hasattr(bn, "reset"):
-                bn.reset()
+        self.lif1.reset_hidden()
+        self.lif1.detach_hidden()
 
 class SpikingVGG11(nn.Module):
     '''
     Implemented in line the network described in the supplementary material of:
     Kim, Y., Panda, P., 2021. Visual explanations from spiking neural networks using inter-spike intervals. Sci Rep 11, 19037. https://doi.org/10.1038/s41598-021-98448-0
 
-    It is designed around tiny-imagenet, as was used in the paper mentioned above.
+    It is designed around tiny-imagenet as was used in the paper mentioned above, with an adaptive average pool before the classifier to be compatible with larger image sizes.
     '''
     def __init__(self, num_classes=200, num_channels=3, beta=0.99, time_steps=30):
         super(SpikingVGG11, self).__init__()
-        self.avgpool = nn.AvgPool2d(kernel_size=2, stride=2)
-        self.adaptive_pool = nn.AdaptiveAvgPool2d((2, 2))
-
         self.time_steps = time_steps
-        
-        self.conv_blocks = nn.ModuleList()
-        self.conv_blocks.append(self.make_conv_block(num_channels, 64, time_steps, beta)) # 1
-        self.conv_blocks.append(self.make_conv_block(64, 128, time_steps, beta)) # 2
-        self.conv_blocks.append(self.make_conv_block(128, 256, time_steps, beta)) # 3
-        self.conv_blocks.append(self.make_conv_block(256, 256, time_steps, beta)) # 4
-        self.conv_blocks.append(self.make_conv_block(256, 512, time_steps, beta)) # 5
-        self.conv_blocks.append(self.make_conv_block(512, 512, time_steps, beta)) # 6
-        self.conv_blocks.append(self.make_conv_block(512, 512, time_steps, beta)) # 7
-        self.conv_blocks.append(self.make_conv_block(512, 512, time_steps, beta)) # 8
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(512 * 2 * 2, 4096),
-            BatchNormTT1dFixed(4096, time_steps=time_steps),
-            snn.Leaky(beta=beta, init_hidden=True),
-            nn.Linear(4096, num_classes)
-        )
-
-    def make_conv_block(self, in_channels, out_channels, time_steps, beta):
-        '''
-        Conv2d -> BatchNormTT2d -> Leaky
-        '''
-        return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
-            BatchNormTT2dFixed(out_channels, time_steps=time_steps),
-            snn.Leaky(beta=beta, init_hidden=True)
-        )
+        # vgg‐style config
+        cfg = [64, 'M', 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512]
+        self.features = nn.ModuleList()
+        c = num_channels
+        for v in cfg:
+            if v == 'M':
+                self.features.append(nn.AvgPool2d(2,2))
+            else:
+                self.features.append(SpikingConvBlock(c, v, time_steps, beta))
+                c = v
+  
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((2,2))
+        self.classifier = SpikingClassifier(num_classes, time_steps, beta)
     
-    def forward(self, x):
-        for block in self.conv_blocks:
-            utils.reset(block)
-        utils.reset(self.classifier)
-        B, T, C, H, W = x.shape  # batch size, time steps, channels, height, width
+    def reset_hidden(self):
+        for layer in self.features:
+            if isinstance(layer, SpikingConvBlock):
+                layer.reset()
+        
+        self.classifier.reset()
 
-        out_classes_history = []
-        for t in range(self.time_steps):
-            xt = x[:, t]
-            xt = self.conv_blocks[0](xt)
-            xt = self.avgpool(xt)
-            xt = self.conv_blocks[1](xt)
-            xt = self.avgpool(xt)
-            xt = self.conv_blocks[2](xt)
-            xt = self.conv_blocks[3](xt)
-            xt = self.avgpool(xt)
-            xt = self.conv_blocks[4](xt)
-            xt = self.conv_blocks[5](xt)
-            xt = self.avgpool(xt)
-            xt = self.conv_blocks[6](xt)
-            xt = self.conv_blocks[7](xt)
+    def forward(self, x):
+        self.reset_hidden()
+        B, T, C, H, W = x.shape
+        out = []
+        for t in range(T):
+            xt = x[:,t]
+            for layer in self.features:
+                # pooling layers only take x, our blocks take (x,t)
+                xt = layer(xt, t) if isinstance(layer, (SpikingConvBlock,)) else layer(xt)
             xt = self.adaptive_pool(xt)
             xt = xt.view(B, -1)
-            out_classes = self.classifier(xt)
-            out_classes_history.append(out_classes)
-
-        out_classes_history = torch.stack(out_classes_history, dim=1)  # (B, T, num_classes)
-
-        return out_classes_history
+            xt = self.classifier(xt, t)
+            out.append(xt)
+        return torch.stack(out, dim=1)

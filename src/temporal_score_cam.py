@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.snn_utils import compute_raw_mem, compute_delta_raw_mem
+from src.utils.snn_utils import compute_raw_mem, compute_delta_raw_mem
 
 class TemporalScoreCAM:
     """
@@ -15,7 +15,7 @@ class TemporalScoreCAM:
         self.threshold = threshold
         self.snn_model = snn_model
 
-    def get_cam_weights(self, input_tensor, target_layer, last_layer_spikes=True):
+    def get_cam_weights(self, input_tensor, target_layer, last_layer_spikes):
         '''
         input tensor -> input into the network, unaltered, b, t, c, h, w
         target_layer -> the layer we are interested in (last conv layer)
@@ -49,7 +49,7 @@ class TemporalScoreCAM:
             weights = torch.cat(weights, dim=2) # (BATCH, TIME, NUM_CHANNELS, NUM_CLASSES)
             return weights
 
-    def generate_cam_(self, input_tensor, target_layer):
+    def generate_cam_(self, input_tensor, target_layer, last_layer_spikes):
         '''
         Generate the CAM for the specified targets
         
@@ -60,7 +60,7 @@ class TemporalScoreCAM:
         '''
         with torch.no_grad():
             activations = self.extract_activations(input_tensor, target_layer) # (B, T, C', H', W')
-            weights = self.get_cam_weights(input_tensor, target_layer) # (B, T, C', NUM_CLASSES) 
+            weights = self.get_cam_weights(input_tensor, target_layer, last_layer_spikes=last_layer_spikes) # (B, T, C', NUM_CLASSES) 
             
             # Get dimensions
             batch_size, timesteps, num_channels, h, w = activations.shape
@@ -100,12 +100,12 @@ class TemporalScoreCAM:
         cams = cams.view(B, T, Cc, H0, W0)
         return cams
 
-    def generate_cam(self, input_tensor, target_layer):
-        cams = self.generate_cam_(input_tensor, target_layer)
+    def generate_cam(self, input_tensor, target_layer, last_layer_spikes=False):
+        cams = self.generate_cam_(input_tensor, target_layer, last_layer_spikes)
         cams = self.rescale_cams(cams, input_tensor)
         return cams # (B, T, NUM_CLASSES, H0, W0)
 
-    def compute_channel_deltas(self, masked_input, last_layer_spikes=True):
+    def compute_channel_deltas(self, masked_input, last_layer_spikes):
         '''
         computer the delta in cumulative membrane potential between timesteps for all classification targets
         masked_input -> input tensor with the scorecam channel mask applied

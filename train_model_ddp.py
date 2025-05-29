@@ -29,22 +29,23 @@ def main():
     model = get_model(
         config["MODEL_NAME"],
         num_classes=len(train_loader.dataset.classes),
-        time_steps=config["NUM_STEPS"],
-        num_channels=num_channels
+        time_steps=config["N_TIME_BINS"],
+        num_channels=num_channels,
+        beta=config["BETA"]
     )
 
     model = ddp_model(model, config["LOCAL_RANK"])
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     #criterion = SF.mse_count_loss(correct_rate=0.8, incorrect_rate=0.2)
-    criterion = nn.CrossEntropyLoss()
+    criterion = SF.ce_max_membrane_loss()
 
-    print(f"Total Epochs to run: {config["EPOCHS"]}")
+    print(f"Total Epochs to run: {config['EPOCHS']}")
     for epoch in range(config["EPOCHS"]):
         avg_epoch_train_loss = run_epoch(model, train_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TRAIN")
         avg_epoch_test_loss = run_epoch(model, test_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TEST")
 
     if config["GLOBAL_RANK"] == 0:
-        save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name="dvsgesture", model_name="vgg11")
+        save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name=config["DATASET_NAME"])
 
     ddp_cleanup()
 

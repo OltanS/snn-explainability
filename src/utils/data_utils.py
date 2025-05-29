@@ -8,7 +8,7 @@ import torch
 from torchvision import datasets
 from torchvision.transforms import v2
 
-from utils.config_utils import setup_config_dictionary
+from src.utils.config_utils import setup_config_dictionary
 
 def get_dataset_transforms(dataset_name):
     config = setup_config_dictionary()
