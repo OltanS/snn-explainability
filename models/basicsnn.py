@@ -5,14 +5,14 @@ import snntorch as snn
 
 class BasicSNN(nn.Module):
     '''Simple convolutional SNN, meant to operate on two channels of on and off events, with 128 x 128 resolution.'''
-    def __init__(self, num_classes=11, num_channels=2, beta=0.9, threshold=1.0):
+    def __init__(self, num_classes=11, num_channels=2, beta=0.9, time_steps=30):
         super(BasicSNN, self).__init__()
         self.conv1 = nn.Conv2d(num_channels, 32, kernel_size=3, stride=1, padding=1)
-        self.lif1 = snn.Leaky(beta=beta, threshold=threshold)
+        self.lif1 = snn.Leaky(beta=beta)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.lif2 = snn.Leaky(beta=beta, threshold=threshold)
+        self.lif2 = snn.Leaky(beta=beta)
         self.fc1 = nn.Linear(64 * 32 * 32, num_classes)
-        self.lif3 = snn.Leaky(beta=beta, threshold=threshold)
+        self.lif3 = snn.Leaky(beta=beta)
         self.pool = nn.MaxPool2d(2)
 
     def forward(self, x):

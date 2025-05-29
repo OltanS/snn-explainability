@@ -15,7 +15,7 @@ class TemporalScoreCAM:
         self.threshold = threshold
         self.snn_model = snn_model
 
-    def get_cam_weights(self, input_tensor, target_layer):
+    def get_cam_weights(self, input_tensor, target_layer, last_layer_spikes=True):
         '''
         input tensor -> input into the network, unaltered, b, t, c, h, w
         target_layer -> the layer we are interested in (last conv layer)
@@ -41,7 +41,7 @@ class TemporalScoreCAM:
                     masked_inputs.append(input_tensor * mask)
                 
                 stacked_masked_inputs = torch.cat(masked_inputs, dim=0)
-                deltas = self.compute_channel_deltas(stacked_masked_inputs) # (BATCH, TIME, NUM_CLASSES)
+                deltas = self.compute_channel_deltas(stacked_masked_inputs, last_layer_spikes=last_layer_spikes) # (BATCH, TIME, NUM_CLASSES)
                 channel_deltas = deltas.reshape(len(batch_channels), batch_size, timesteps, -1) # (C_BATCH, BATCH, TIME, NUM_CLASSES)
                 channel_deltas = channel_deltas.permute(1, 2, 0, 3) # (BATCH, TIME, C_BATCH, NUM_CLASSES)
                 weights.append(channel_deltas)
@@ -105,14 +105,17 @@ class TemporalScoreCAM:
         cams = self.rescale_cams(cams, input_tensor)
         return cams # (B, T, NUM_CLASSES, H0, W0)
 
-    def compute_channel_deltas(self, masked_input):
+    def compute_channel_deltas(self, masked_input, last_layer_spikes=True):
         '''
         computer the delta in cumulative membrane potential between timesteps for all classification targets
         masked_input -> input tensor with the scorecam channel mask applied
         needs to be of shape (B, T, C, H, W) so batching is possible.
         '''
-        out_spikes, out_mem = self.snn_model(masked_input)
-        raw_mem = compute_raw_mem(out_spikes, out_mem, self.threshold) # (BATCH, TIME, NUM_CLASSES)
+        if last_layer_spikes:
+            out_spikes, out_mem = self.snn_model(masked_input)
+            raw_mem = compute_raw_mem(out_spikes, out_mem, self.threshold) # (BATCH, TIME, NUM_CLASSES)
+        else:
+            raw_mem = self.snn_model(masked_input)
         # changes in cumulative membrane potential for all classes across all timesteps
         delta_raw_mem = compute_delta_raw_mem(raw_mem) # (BATCH, TIME, NUM_CLASSES)
         return delta_raw_mem

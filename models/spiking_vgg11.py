@@ -47,15 +47,16 @@ class SpikingVGG11(nn.Module):
     Kim, Y., Panda, P., 2021. Visual explanations from spiking neural networks using inter-spike intervals. Sci Rep 11, 19037. https://doi.org/10.1038/s41598-021-98448-0
 
     It is designed around tiny-imagenet, as was used in the paper mentioned above.
-    Note that it originally outputted logits to be softmaxed, not spikes. We elect to stick to the spike-based nature and add a Leaky layer at the end.
     '''
-    def __init__(self, num_classes=200, time_steps=30, beta=0.95):
+    def __init__(self, num_classes=200, num_channels=3, beta=0.99, time_steps=30):
         super(SpikingVGG11, self).__init__()
         self.avgpool = nn.AvgPool2d(kernel_size=2, stride=2)
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((2, 2))
+
         self.time_steps = time_steps
         
         self.conv_blocks = nn.ModuleList()
-        self.conv_blocks.append(self.make_conv_block(3, 64, time_steps, beta)) # 1
+        self.conv_blocks.append(self.make_conv_block(num_channels, 64, time_steps, beta)) # 1
         self.conv_blocks.append(self.make_conv_block(64, 128, time_steps, beta)) # 2
         self.conv_blocks.append(self.make_conv_block(128, 256, time_steps, beta)) # 3
         self.conv_blocks.append(self.make_conv_block(256, 256, time_steps, beta)) # 4
@@ -68,9 +69,7 @@ class SpikingVGG11(nn.Module):
             nn.Linear(512 * 2 * 2, 4096),
             BatchNormTT1dFixed(4096, time_steps=time_steps),
             snn.Leaky(beta=beta, init_hidden=True),
-            nn.Linear(4096, num_classes),
-            BatchNormTT1dFixed(num_classes, time_steps=time_steps),
-            snn.Leaky(beta=beta)
+            nn.Linear(4096, num_classes)
         )
 
     def make_conv_block(self, in_channels, out_channels, time_steps, beta):
@@ -89,8 +88,7 @@ class SpikingVGG11(nn.Module):
         utils.reset(self.classifier)
         B, T, C, H, W = x.shape  # batch size, time steps, channels, height, width
 
-        out_spikes = []
-        out_mem = []
+        out_classes_history = []
         for t in range(self.time_steps):
             xt = x[:, t]
             xt = self.conv_blocks[0](xt)
@@ -105,13 +103,11 @@ class SpikingVGG11(nn.Module):
             xt = self.avgpool(xt)
             xt = self.conv_blocks[6](xt)
             xt = self.conv_blocks[7](xt)
-            xt = self.avgpool(xt)
+            xt = self.adaptive_pool(xt)
             xt = xt.view(B, -1)
-            out_spike, mem_t = self.classifier(xt)
-            out_spikes.append(out_spike)
-            out_mem.append(mem_t)
+            out_classes = self.classifier(xt)
+            out_classes_history.append(out_classes)
 
-        out_spikes = torch.stack(out_spikes, dim=1)  # B, T, num_classes
-        out_mem = torch.stack(out_mem, dim=1)
+        out_classes_history = torch.stack(out_classes_history, dim=1)  # (B, T, num_classes)
 
-        return out_spikes, out_mem  # B, T, num_classes
+        return out_classes_history

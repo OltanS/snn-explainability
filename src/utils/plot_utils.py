@@ -14,6 +14,19 @@ def plot_frames(frames):
     plt.tight_layout()
     plt.show()
 
+def combine_polarities(frames):
+    # frames are of shape time_frame, polarity, height, width
+    # we can concat both polarities (there might be some overlap, but that's ok!)
+    # negative polarities are turned into negative numbers
+    polarity_zero = -frames[:, 0, :, :]
+    polarity_one = frames[:, 1, :, :]
+    # Take the value with the largest magnitude
+    mask = np.abs(polarity_zero) > np.abs(polarity_one)
+    combined = np.where(mask, polarity_zero, polarity_one)
+    
+    # print(combined.shape)
+    return combined
+
 def plot_combined_frames(combined_frames):
     n_frames = len(combined_frames)
     h, w = combined_frames[0].shape
@@ -48,24 +61,20 @@ def plot_cams(cams, class_idx=0, frames=None, timesteps=None,
 
     n = len(indices)
     # decide grid: if overlay, two rows; else one
-    nrows = 2 if frames is not None else 1
-    fig, axes = plt.subplots(nrows, n, figsize=(n * 3, nrows * 3))
+    fig, axes = plt.subplots(1, n, figsize=(n * 6, 5))
     axes = np.atleast_2d(axes)
 
     for col, t in enumerate(indices):
-        heat = cams[t]
-        ax_heat = axes[-1, col]
-        im = ax_heat.imshow(heat, cmap=cmap, vmin=vmin, vmax=vmax)
-        ax_heat.set_title(f"t={t}")
-        # ax_heat.axis('off')
-
         if frames is not None:
             frame = frames[t]
-            ax_frame = axes[0, col]
-            ax_frame.imshow(frame, cmap='gray')
-            #ax_frame.axis('off')
-            # overlay
-            ax_frame.imshow(heat, cmap=cmap, alpha=alpha, vmin=vmin, vmax=vmax)
+            ax_frame = axes[-1, col]
+            ax_frame.imshow(frame, cmap='gray',)
+        heat = cams[t]
+        ax_heat = axes[-1, col]
+        im = ax_heat.imshow(heat, cmap=cmap, vmin=vmin, vmax=vmax, alpha=alpha)
+        ax_heat.set_title(f"t={t}")
+
+
 
     # colorbar on the last column of heatmaps
     fig.subplots_adjust(right=0.8)

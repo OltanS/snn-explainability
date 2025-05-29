@@ -1,0 +1,53 @@
+import torch
+import torch.nn as nn
+import snntorch.functional as SF
+
+from src.utils.config_utils import setup_config_dictionary
+from src.utils.save_utils import save_model
+from src.utils.distributed_utils import ddp_setup, ddp_cleanup, ddp_model
+from src.utils.data_utils import get_dataloaders
+from src.utils.model_utils import get_model
+from src.utils.train_utils import run_epoch
+
+def main():
+    '''
+    This must always be run with DDP enabled, even if on a single node, via torchrun.
+    '''
+    config = setup_config_dictionary()
+    ddp_setup(config["LOCAL_RANK"])
+
+    train_loader, test_loader = get_dataloaders(
+        config["DATASET_NAME"], 
+        config["BATCH_SIZE"], 
+        config["ON_DDP"]
+    )
+
+    # Infer number of channels from the first batch: (B, T, C, H, W)
+    event_batches, _ = next(iter(train_loader))
+    num_channels = event_batches.shape[2]
+
+    model = get_model(
+        config["MODEL_NAME"],
+        num_classes=len(train_loader.dataset.classes),
+        time_steps=config["NUM_STEPS"],
+        num_channels=num_channels
+    )
+
+    model = ddp_model(model, config["LOCAL_RANK"])
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    #criterion = SF.mse_count_loss(correct_rate=0.8, incorrect_rate=0.2)
+    criterion = nn.CrossEntropyLoss()
+
+    print(f"Total Epochs to run: {config["EPOCHS"]}")
+    for epoch in range(config["EPOCHS"]):
+        avg_epoch_train_loss = run_epoch(model, train_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TRAIN")
+        avg_epoch_test_loss = run_epoch(model, test_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TEST")
+
+    if config["GLOBAL_RANK"] == 0:
+        save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name="dvsgesture", model_name="vgg11")
+
+    ddp_cleanup()
+
+
+if __name__ == "__main__":
+    main()

@@ -29,5 +29,6 @@ def ddp_model(model, local_rank):
         model (torch.nn.Module): The model to wrap
         local_rank (int): The rank of the current process
     '''
+    model.to(local_rank)
     training_optimisations(model)
     return torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])

@@ -23,6 +23,9 @@ def compute_delta_raw_mem(raw_mem: torch.Tensor,
     """
     Compute Δ raw_mem[t] = raw_mem[t] − raw_mem[t-1].
     If keep_first_zero, pads a zero at t=0 so out is (B,T,C), else returns (B,T-1,C).
+
+    In a non-spiking network, this is equivalent to computing the difference
+    between consecutive timesteps of the class outputs.
     """
     delta = raw_mem[:, 1:] - raw_mem[:, :-1]   # (B, T-1, C)
     if keep_first_zero:
