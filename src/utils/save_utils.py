@@ -1,6 +1,10 @@
-import torch
 import glob
 import os
+
+import torch
+
+from IPython.display import display, clear_output
+import ipywidgets as widgets
 
 from src.utils.model_utils import get_model_name
 
@@ -22,37 +26,90 @@ def save_model(model, directory, optimizer, epoch, loss, dataset_name):
                 'epoch': epoch,
                 'loss': loss,
     }
+    model = model.module if hasattr(model, 'module') else model  # Handle DataParallel or DistributedDataParallel
     model_name = get_model_name(model)
     torch.save(state, f"{directory}/e{epoch + 1}_L{loss:.2f}_{dataset_name}_{model_name}.pth")
 
-def load_model(model, directory, dataset_name, optimizer=None):
-    '''
-    Loads the model from the given location.
+def load_model(model, path_or_dir, dataset_name, optimizer=None):
+    """
+    Loads the model from either:
+      • a single file (if path_or_dir is a file), or
+      • the newest matching file in a directory.
+
     args:
-        directory: str, the directory to load the model from
-        model: nn.Module, the model to load
-        optimizer: torch.optim, the optimizer to load
-    '''
-    model_name = get_model_name(model)
-    model_files = [f for f in glob.glob(f"{directory}/*") if dataset_name in f and model_name in f]
-    if not model_files:
-        raise FileNotFoundError(f"No model files found in {directory} for dataset '{dataset_name}' and model '{model_name}'.")
-    last_model_file = max(model_files, key=os.path.getctime)
-    print(f"Loading model from {last_model_file}")
-    if not torch.cuda.is_available():
-        checkpoint = torch.load(last_model_file, map_location=torch.device('cpu'))
+      path_or_dir: str, path to a model‐file or a directory to scan
+      model:       nn.Module to load weights into
+      optimizer:   optional torch.optim to restore state
+    returns:
+      (epoch, loss)
+    """
+    # determine whether we're given a file or a directory
+    if os.path.isfile(path_or_dir):
+        model_file = path_or_dir
     else:
-        checkpoint = torch.load(last_model_file)
+        model_name = get_model_name(model)
+        candidates = glob.glob(os.path.join(path_or_dir, "*"))
+        model_files = [
+            f for f in candidates
+            if dataset_name in os.path.basename(f)
+               and model_name in os.path.basename(f)
+        ]
+        if not model_files:
+            raise FileNotFoundError(
+                f"No model files found in {path_or_dir!r} for "
+                f"dataset={dataset_name!r}, model={model_name!r}"
+            )
+        model_file = max(model_files, key=os.path.getctime)
 
-    model_state_dict = checkpoint['model_state_dict']
-    if any(key.startswith('module.') for key in model_state_dict.keys()):
-        # For models saved with DataParallel or DistributedDataParallel
-        model_state_dict = {k.replace("module.", ""): v for k, v in model_state_dict.items()}
+    print(f"Loading model from {model_file}")
+    # load checkpoint
+    if not torch.cuda.is_available():
+        ckpt = torch.load(model_file, map_location="cpu")
+    else:
+        ckpt = torch.load(model_file)
 
-    model.load_state_dict(model_state_dict)
-    if optimizer is not None:
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    epoch = checkpoint['epoch']
-    loss = checkpoint['loss']
-    
-    return epoch, loss
+    # strip DataParallel prefix if needed
+    sd = ckpt["model_state_dict"]
+    if any(k.startswith("module.") for k in sd):
+        sd = {k.replace("module.", ""): v for k, v in sd.items()}
+
+    model.load_state_dict(sd)
+    if optimizer is not None and "optimizer_state_dict" in ckpt:
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+
+    return ckpt.get("epoch"), ckpt.get("loss")
+
+def interactive_load_model(model, directory, dataset_name, optimizer=None):
+    """
+    Jupyter-friendly model loader that lets user select and load a checkpoint.
+    Shows result in output widget.
+    """
+    print("Make sure that both ENABLE_BNTT matches the state the model was trained with.")
+    model_name = get_model_name(model)
+    files = [f for f in glob.glob(os.path.join(directory, '*'))
+             if dataset_name in f and model_name in f]
+    if not files:
+        raise FileNotFoundError(f"No checkpoints in {directory!r} for {dataset_name!r}, {model_name!r}")
+
+    files.sort(key=os.path.getmtime, reverse=True)  # Newest first
+    titles = [os.path.basename(f) for f in files]
+
+    dd = widgets.Dropdown(options=list(zip(titles, files)), description='Checkpoint:')
+    btn = widgets.Button(description="Load", button_style='primary')
+    out = widgets.Output()
+
+    def on_load(b):
+        btn.disabled = True
+        with out:
+            clear_output()
+            try:
+                path = dd.value
+                print(f"Loading {os.path.basename(path)}...")
+                epoch, loss = load_model(model, path, dataset_name, optimizer)
+                print(f"✓ Loaded {os.path.basename(path)} → epoch={epoch}, loss={loss:.4f}")
+            except Exception as e:
+                print(f"✗ Error: {e}")
+
+    btn._click_handlers.callbacks.clear()
+    btn.on_click(on_load)
+    display(widgets.VBox([dd, btn, out]))

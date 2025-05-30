@@ -8,9 +8,9 @@ model_to_name = {
 
 name_to_model = {v: k for k, v in model_to_name.items()}
 
-def get_model(model_name, num_classes, time_steps=30, num_channels=3, beta=0.95):
+def get_model(model_name, num_classes, num_channels, time_steps, beta, enable_bntt):
     ModelClass = get_model_class(model_name)
-    return ModelClass(num_classes=num_classes, time_steps=time_steps, num_channels=num_channels, beta=beta)
+    return ModelClass(num_classes=num_classes, num_channels=num_channels, time_steps=time_steps, beta=beta, enable_bntt=enable_bntt)
 
 def get_model_name(model):
     model_name = model_to_name.get(type(model), None)

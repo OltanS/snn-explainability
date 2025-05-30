@@ -13,3 +13,4 @@ tqdm
 ttach
 scikit-learn
 av
+ipywidgets

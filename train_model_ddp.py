@@ -29,9 +29,10 @@ def main():
     model = get_model(
         config["MODEL_NAME"],
         num_classes=len(train_loader.dataset.classes),
-        time_steps=config["N_TIME_BINS"],
         num_channels=num_channels,
-        beta=config["BETA"]
+        time_steps=config["N_TIME_BINS"],
+        beta=config["BETA"],
+        enable_bntt=config["ENABLE_BNTT"],
     )
 
     model = ddp_model(model, config["LOCAL_RANK"])
@@ -44,9 +45,9 @@ def main():
         avg_epoch_train_loss = run_epoch(model, train_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TRAIN")
         avg_epoch_test_loss = run_epoch(model, test_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TEST")
 
-    if config["GLOBAL_RANK"] == 0:
-        save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name=config["DATASET_NAME"])
-
+        if (epoch + 1) % config["SAVE_EVERY_N_EPOCHS"] == 0:
+            if config["GLOBAL_RANK"] == 0:
+                save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name=config["DATASET_NAME"])
     ddp_cleanup()
 
 

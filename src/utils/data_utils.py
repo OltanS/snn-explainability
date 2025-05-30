@@ -10,9 +10,13 @@ from torchvision.transforms import v2
 
 from src.utils.config_utils import setup_config_dictionary
 
+def to_spike_tensor(x, num_steps):
+    # c, h, w = x.shape
+    return spikegen.rate(x, num_steps=num_steps)
+
 def get_dataset_transforms(dataset_name):
     config = setup_config_dictionary()
-    if dataset_name == "tinyimagenet":
+    if dataset_name == "tiny_imagenet":
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
         return v2.Compose([
@@ -20,7 +24,7 @@ def get_dataset_transforms(dataset_name):
             v2.ToImage(),
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize(mean, std),
-            lambda x: spikegen.rate(x.unsqueeze(0), num_steps=config["N_TIME_BINS"]).squeeze(1).permute(1, 0, 2, 3)
+            lambda x : to_spike_tensor(x, num_steps=config["N_TIME_BINS"]),
         ])
     
     elif dataset_name == "dvs_gesture":
@@ -37,7 +41,7 @@ def get_dataset_transforms(dataset_name):
 def get_datasets(dataset_name):
     config = setup_config_dictionary()
     transforms = get_dataset_transforms(dataset_name)
-    if dataset_name == "tinyimagenet":
+    if dataset_name == "tiny_imagenet":
         DATA_DIR = config["DATA_SAVE_DIR"] + "/tiny-imagenet-200"
         TRAIN_DIR = os.path.join(DATA_DIR, "train")
         VAL_DIR = os.path.join(DATA_DIR, "val")

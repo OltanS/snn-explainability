@@ -12,9 +12,9 @@ def setup_config_dictionary(env_path="config.env"):
         if value is None:
             return value
         
-        if value is "True":
+        if value == "True":
             return True
-        elif value is "False":
+        elif value == "False":
             return False
         
         # Try to convert to int first

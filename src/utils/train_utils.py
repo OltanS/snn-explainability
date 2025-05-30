@@ -32,6 +32,7 @@ def run_epoch(model, loader, local_rank, epoch, optimizer, criterion, mode):
         pbar  = tqdm(loader, total=len(loader), desc=f"Epoch {epoch + 1}", unit="batch", disable=local_rank != 0)
         for event_batches, labels in pbar:
             event_batches = event_batches.to(local_rank) # B, T, C, H, W
+            # print(f"Event batch shape: {event_batches.shape}")
             labels = labels.to(local_rank)
             optimizer.zero_grad()
             # for models that return spikes + membrane potential vs just membrane potential
