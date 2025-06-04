@@ -17,11 +17,11 @@ def compute_raw_mem(out_spikes: torch.Tensor,
     """
     return out_mem + out_spikes * threshold
 
-def compute_delta_raw_mem(raw_mem: torch.Tensor,
+def compute_delta_outputs(raw_mem: torch.Tensor,
                           keep_first_zero: bool = True
                          ) -> torch.Tensor:
     """
-    Compute Δ raw_mem[t] = raw_mem[t] − raw_mem[t-1].
+    Computes the difference between consecutive timesteps of outputs
     If keep_first_zero, pads a zero at t=0 so out is (B,T,C), else returns (B,T-1,C).
 
     In a non-spiking network, this is equivalent to computing the difference

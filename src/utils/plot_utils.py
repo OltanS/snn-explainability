@@ -2,15 +2,47 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def plot_frames(frames):
-    n_frames = len(frames)
-    fig, axes = plt.subplots(2, n_frames, figsize=(n_frames * 3, 6))
+    # Accept frames in (B, H, W, C) or (B, C, H, W)
+    arr = frames
+    if arr.ndim == 4:
+        # if channels are in axis=1, move to last axis
+        if arr.shape[-1] not in (1, 2, 3) and arr.shape[1] in (1, 2, 3):
+            arr = np.transpose(arr, (0, 2, 3, 1))
+    else:
+        raise ValueError(f"Unsupported frames shape {arr.shape}, expected 4D array.")
     
-    for i, frame in enumerate(frames):
-        # frame[0] is polarity 0 and frame[1] is polarity 1
-        axes[0, i].imshow(frame[1], cmap='gray')
-        axes[0, i].set_title("Polarity OFF (0)")
-        axes[1, i].imshow(frame[0], cmap='gray')
-        axes[1, i].set_title("Polarity ON (1)")
+    B, H, W, C = arr.shape
+    n_frames = B
+    num_channels = C
+
+    if num_channels == 1:
+        fig, axes = plt.subplots(1, n_frames, figsize=(n_frames * 3, 3), squeeze=False)
+        for i in range(n_frames):
+            frame = arr[i, :, :, 0]
+            axes[i].imshow(frame, cmap='gray')
+            axes[i].set_title(f"Frame {i}")
+            axes[i].axis('off')
+
+    elif num_channels == 2:
+        fig, axes = plt.subplots(2, n_frames, figsize=(n_frames * 3, 6), squeeze=False)
+        for i in range(n_frames):
+            off_frame = arr[i, :, :, 0]
+            on_frame  = arr[i, :, :, 1]
+            axes[0, i].imshow(off_frame, cmap='gray')
+            axes[0, i].set_title(f"Frame {i} - Polarity OFF")
+            axes[1, i].imshow(on_frame,  cmap='gray')
+            axes[1, i].set_title(f"Frame {i} - Polarity ON")
+
+    elif num_channels == 3:
+        fig, axes = plt.subplots(1, n_frames, figsize=(n_frames * 3, 3), squeeze=False)
+        for i in range(n_frames):
+            axes[i].imshow(arr[i])
+            axes[i].set_title(f"Frame {i}")
+            axes[i].axis('off')
+
+    else:
+        raise ValueError(f"Unsupported number of channels: {num_channels}. Expected 1, 2, or 3.")
+
     plt.tight_layout()
     plt.show()
 
@@ -18,8 +50,8 @@ def combine_polarities(frames):
     # frames are of shape time_frame, polarity, height, width
     # we can concat both polarities (there might be some overlap, but that's ok!)
     # negative polarities are turned into negative numbers
-    polarity_zero = -frames[:, 0, :, :]
-    polarity_one = frames[:, 1, :, :]
+    polarity_zero = -frames[:, :, :, 0]
+    polarity_one = frames[:, :, :, 1]
     # Take the value with the largest magnitude
     mask = np.abs(polarity_zero) > np.abs(polarity_one)
     combined = np.where(mask, polarity_zero, polarity_one)
@@ -68,13 +100,11 @@ def plot_cams(cams, class_idx=0, frames=None, timesteps=None,
         if frames is not None:
             frame = frames[t]
             ax_frame = axes[-1, col]
-            ax_frame.imshow(frame, cmap='gray',)
+            ax_frame.imshow(frame)
         heat = cams[t]
         ax_heat = axes[-1, col]
         im = ax_heat.imshow(heat, cmap=cmap, vmin=vmin, vmax=vmax, alpha=alpha)
         ax_heat.set_title(f"t={t}")
-
-
 
     # colorbar on the last column of heatmaps
     fig.subplots_adjust(right=0.8)
@@ -82,7 +112,6 @@ def plot_cams(cams, class_idx=0, frames=None, timesteps=None,
     cbar = fig.colorbar(im, cax=cbar_ax)
     cbar.set_label('Activation') 
     plt.show()
-
 
 def plot_activations(activations, frames=None, timesteps=None,
               cmap='jet', alpha=0.5, vmin=0.0, vmax=1.0):

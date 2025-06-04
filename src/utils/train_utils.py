@@ -35,13 +35,9 @@ def run_epoch(model, loader, local_rank, epoch, optimizer, criterion, mode):
             # print(f"Event batch shape: {event_batches.shape}")
             labels = labels.to(local_rank)
             optimizer.zero_grad()
-            # for models that return spikes + membrane potential vs just membrane potential
-            if isinstance(model, tuple):
-                # output would be out_spikes
-                output, _ = model(event_batches)
-            else:
-                # output would be out_classes or out_membrane. It will be matched with appropriate criterion
-                output = model(event_batches)
+            # for models that return e.g mem_history
+
+            output, _ = model(event_batches)
             
             loss = apply_criterion(criterion, output, labels)
             epoch_loss += loss.item()

@@ -10,10 +10,6 @@ from torchvision.transforms import v2
 
 from src.utils.config_utils import setup_config_dictionary
 
-def to_spike_tensor(x, num_steps):
-    # c, h, w = x.shape
-    return spikegen.rate(x, num_steps=num_steps)
-
 def get_dataset_transforms(dataset_name):
     config = setup_config_dictionary()
     if dataset_name == "tiny_imagenet":
@@ -24,7 +20,7 @@ def get_dataset_transforms(dataset_name):
             v2.ToImage(),
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize(mean, std),
-            lambda x : to_spike_tensor(x, num_steps=config["N_TIME_BINS"]),
+            lambda x : spikegen.rate(x, num_steps=config["N_TIME_BINS"]),
         ])
     
     elif dataset_name == "dvs_gesture":
