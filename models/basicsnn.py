@@ -136,7 +136,36 @@ if __name__ == "__main__":
                 #print(f"Restored membrane state for {name}: expected {expected}, actual {module.mem[0]}")
                 assert torch.allclose(actual, expected)
         return True
+    
+    def test_restore_membrane_states_extensive():
+        model = BasicSNN(num_classes=num_classes, num_channels=channels, time_steps=timesteps, beta=0.9, enable_bntt=True)
+        x = torch.randn(batch_size, timesteps, channels, h, w)
+        baseline_outputs, mem_histories = model(x)
         
+        # Store membrane states at t=2 - get from mem_histories, not current module.mem
+        target_timestep = 2
+        expected_states = {}
+        for name, module in model.named_modules():
+            if isinstance(module, snn.Leaky) and name in mem_histories:
+                # Get the state at timestep 2 from the histories
+                expected_states[name] = mem_histories[name][:, target_timestep].clone()
+        
+        # Do some other forward passes to change states
+        dummy_input = torch.randn_like(x)
+        model(dummy_input)
+        
+        # Restore and check
+        model.restore_membrane_states(mem_histories, target_timestep)
+        for name, module in model.named_modules():
+            if isinstance(module, snn.Leaky) and name in expected_states:
+                # print(f"Shape of module mem {module.mem.shape} Expected shape {expected_states[name].shape}")
+                # print(module.mem[0][0])
+                # print("---------------------------------------")
+                # print(expected_states[name][0][0])
+                assert torch.allclose(module.mem, expected_states[name])
+        
+        return True
+
     def test_forward_and_mem_histories():
         model = BasicSNN(num_classes=num_classes, num_channels=channels, time_steps=timesteps, beta=0.9, enable_bntt=True)
         x = torch.randn(batch_size, timesteps, channels, h, w)
@@ -214,6 +243,7 @@ if __name__ == "__main__":
         "collect_memories": test_collect_memories,
         "format_mem_histories": test_format_mem_histories,
         "restore_membrane_states": test_restore_membrane_states,
+        "restore_membrane_states_extensive" : test_restore_membrane_states_extensive,
         "forward_and_mem_histories": test_forward_and_mem_histories,
         "_forward_without_reset": test__forward_without_reset,
         "forward_from_state": test_forward_from_state,

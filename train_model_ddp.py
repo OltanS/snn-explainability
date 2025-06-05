@@ -35,16 +35,27 @@ def main():
         enable_bntt=config["ENABLE_BNTT"],
     )
 
-    model = ddp_model(model, config["LOCAL_RANK"])
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     #criterion = SF.mse_count_loss(correct_rate=0.8, incorrect_rate=0.2)
     criterion = SF.ce_max_membrane_loss()
+    model = ddp_model(model, config["LOCAL_RANK"])
+    
+    optimizer = torch.optim.SGD(model.parameters(), lr=config["LEARNING_RATE"], momentum=0.9, weight_decay=config["WEIGHT_DECAY"])
+    milestones = [
+        int(0.5 * config["EPOCHS"]),
+        int(0.7 * config["EPOCHS"]),
+        int(0.9 * config["EPOCHS"]),
+    ]
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=milestones,
+        gamma=0.1
+    )
 
     print(f"Total Epochs to run: {config['EPOCHS']}")
     for epoch in range(config["EPOCHS"]):
         avg_epoch_train_loss = run_epoch(model, train_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TRAIN")
         avg_epoch_test_loss = run_epoch(model, test_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TEST")
-
+        scheduler.step()
         if (epoch + 1) % config["SAVE_EVERY_N_EPOCHS"] == 0:
             if config["GLOBAL_RANK"] == 0:
                 save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name=config["DATASET_NAME"])

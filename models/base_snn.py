@@ -80,8 +80,7 @@ class BaseSNN(nn.Module):
         """
         for name, module in self.named_modules():
             if isinstance(module, snn.Leaky) and name in mem_histories:
-                module_mem = mem_histories[name][:, timestep]
-                module.mem = module_mem.clone()
+                module.mem = mem_histories[name][:, timestep].clone()
     
     def forward_from_state(self, x, timestep, mem_histories):
         """

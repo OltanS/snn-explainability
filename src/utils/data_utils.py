@@ -31,6 +31,14 @@ def get_dataset_transforms(dataset_name):
             v2.ToDtype(torch.float32, scale=True),
         ])
     
+    elif dataset_name == "ucf101":
+        return v2.Compose([
+            v2.Resize((224, 224)),
+            v2.ToImage(),
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) 
+        ])
+    
     else:
         raise ValueError(f"Dataset {dataset_name} is not implemented.")
 
@@ -50,6 +58,40 @@ def get_datasets(dataset_name):
     elif dataset_name == "dvs_gesture":
         train_ds = tonic.datasets.DVSGesture(save_to=config["DATA_SAVE_DIR"], transform=transforms, train=True)
         test_ds = tonic.datasets.DVSGesture(save_to=config["DATA_SAVE_DIR"], transform=transforms, train=False)
+
+    elif dataset_name == "ucf101":
+        # torchvision spams us with deprecation warnings for UCF101, telling us to go do torchcodec...
+        import warnings
+        warnings.filterwarnings("ignore", category=DeprecationWarning) 
+        
+        from torchvision.datasets import UCF101
+        class VideoOnlyUCF101(UCF101):
+            """UCF101 dataset wrapper that only returns video and labels"""   
+            def __getitem__(self, idx):
+                video, audio, label = super().__getitem__(idx)
+                return video, label  # Drop audio completely
+            
+        train_ds = VideoOnlyUCF101(
+            root=f'{config["DATA_SAVE_DIR"]}/UCF-101',
+            annotation_path=f'{config["DATA_SAVE_DIR"]}/ucfTrainTestlist',
+            frames_per_clip=config["N_TIME_BINS"],
+            step_between_clips=config["N_TIME_BINS"],
+            frame_rate=None,
+            train=True,
+            transform=transforms,
+            output_format='TCHW'  # TCHW: Time, Channels, Height, Width
+        )
+
+        test_ds = VideoOnlyUCF101(
+            root=f'{config["DATA_SAVE_DIR"]}/UCF-101',
+            annotation_path=f'{config["DATA_SAVE_DIR"]}/ucfTrainTestlist',
+            frames_per_clip=config["N_TIME_BINS"],
+            step_between_clips=config["N_TIME_BINS"],
+            frame_rate=None,
+            train=False,
+            transform=transforms,
+            output_format='TCHW'  # TCHW: Time, Channels, Height, Width
+        )
 
     else:
         raise ValueError(f"Dataset {dataset_name} is not implemented.")
