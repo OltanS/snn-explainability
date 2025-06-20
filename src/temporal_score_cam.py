@@ -53,10 +53,10 @@ class TemporalScoreCAM:
                     one_channel_masked_batched = stacked_masked_inputs[c]
                     # these are the output for all the c_out channel masked items in the batch that correspond to the timestep
                     # they are of shape b, num_classes
-                    outputs = self.snn_model._forward_one_step(one_channel_masked_batched, t) # b, num_classes
+                    outputs = self.snn_model._forward_one_step(one_channel_masked_batched[:, t], t) # b, num_classes
                     baseline = baseline_outputs[:, t] # b, num_classes
                     scores = outputs - baseline
-                    channel_scores.append(scores)                
+                    channel_scores.append(scores) 
                 channel_scores = torch.stack(channel_scores, dim=1) # b, num_channels, num_classes
                 all_scores.append(channel_scores)
 

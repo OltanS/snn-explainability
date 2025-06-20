@@ -1,3 +1,7 @@
+import warnings
+warnings.filterwarnings("ignore", message=".*video decoding and encoding capabilities.*deprecated.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*pts_unit", category=UserWarning)
+
 import torch
 import torch.nn as nn
 import snntorch.functional as SF
@@ -35,21 +39,12 @@ def main():
         enable_bntt=config["ENABLE_BNTT"],
     )
 
-    #criterion = SF.mse_count_loss(correct_rate=0.8, incorrect_rate=0.2)
-    criterion = SF.ce_max_membrane_loss()
+    criterion = nn.CrossEntropyLoss()
+    #criterion = SF.ce_max_membrane_loss()
     model = ddp_model(model, config["LOCAL_RANK"])
     
-    optimizer = torch.optim.SGD(model.parameters(), lr=config["LEARNING_RATE"], momentum=0.9, weight_decay=config["WEIGHT_DECAY"])
-    milestones = [
-        int(0.5 * config["EPOCHS"]),
-        int(0.7 * config["EPOCHS"]),
-        int(0.9 * config["EPOCHS"]),
-    ]
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer,
-        milestones=milestones,
-        gamma=0.1
-    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config["EPOCHS"])
 
     print(f"Total Epochs to run: {config['EPOCHS']}")
     for epoch in range(config["EPOCHS"]):
@@ -58,7 +53,7 @@ def main():
         scheduler.step()
         if (epoch + 1) % config["SAVE_EVERY_N_EPOCHS"] == 0:
             if config["GLOBAL_RANK"] == 0:
-                save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name=config["DATASET_NAME"])
+                save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name=config["DATASET_NAME"], enable_bntt=config["ENABLE_BNTT"])
     ddp_cleanup()
 
 

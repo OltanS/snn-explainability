@@ -19,9 +19,9 @@ def plot_frames(frames):
         fig, axes = plt.subplots(1, n_frames, figsize=(n_frames * 3, 3), squeeze=False)
         for i in range(n_frames):
             frame = arr[i, :, :, 0]
-            axes[i].imshow(frame, cmap='gray')
-            axes[i].set_title(f"Frame {i}")
-            axes[i].axis('off')
+            axes[0, i].imshow(frame, cmap='gray')
+            axes[0, i].set_title(f"Frame {i}")
+            axes[0, i].axis('off')
 
     elif num_channels == 2:
         fig, axes = plt.subplots(2, n_frames, figsize=(n_frames * 3, 6), squeeze=False)
@@ -36,9 +36,9 @@ def plot_frames(frames):
     elif num_channels == 3:
         fig, axes = plt.subplots(1, n_frames, figsize=(n_frames * 3, 3), squeeze=False)
         for i in range(n_frames):
-            axes[i].imshow(arr[i])
-            axes[i].set_title(f"Frame {i}")
-            axes[i].axis('off')
+            axes[0, i].imshow(arr[i])
+            axes[0, i].set_title(f"Frame {i}")
+            axes[0, i].axis('off')
 
     else:
         raise ValueError(f"Unsupported number of channels: {num_channels}. Expected 1, 2, or 3.")

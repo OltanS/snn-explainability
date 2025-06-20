@@ -6,7 +6,7 @@ import snntorch as snn
 from models.base_snn import BaseSNN
 
 class BasicSNN(BaseSNN):
-    '''Simple convolutional SNN, meant to operate on two channels of on and off events, with 128 x 128 resolution.'''
+    '''Simple convolutional SNN.'''
     def __init__(self, num_classes, num_channels, time_steps, beta, enable_bntt):
         super(BasicSNN, self).__init__()
         self.conv1 = nn.Conv2d(num_channels, 32, kernel_size=3, stride=1, padding=1)
@@ -22,8 +22,7 @@ class BasicSNN(BaseSNN):
         self.fc1 = nn.Linear(64 * 4 * 4, num_classes)
         self.pool = nn.AvgPool2d(2)
         
-    def _forward_one_step(self, x, t):
-        xt = x[:, t]
+    def _forward_one_step(self, xt, t):
         B, C, H, W = xt.shape # batch size,  number of channels(polarities), height, width
         c1 = self.conv1(xt)
         c1 = self.bn1[t](c1)

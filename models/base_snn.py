@@ -12,6 +12,9 @@ class BaseSNN(nn.Module):
         super(BaseSNN, self).__init__()
 
     def forward(self, x):
+        '''
+        returns -> outputs and mem_histories. mem_histories[t] is the membrane potential before the forward pass at time t + after the last forward pass. so there are T+1 entries in the list.
+        '''
         self.reset_memories()
         return self._forward_without_reset(x)
     
@@ -20,17 +23,19 @@ class BaseSNN(nn.Module):
         mem_histories = self.create_mem_histories()
         outputs = []
         for t in range(T):
-            f = self._forward_one_step(x, t)
+            xt = x[:,t]
+            f = self._forward_one_step(xt, t)
             outputs.append(f)
             self.collect_memories(mem_histories)
+
         self.format_mem_histories(mem_histories)
         outputs = torch.stack(outputs, dim=1)  # Stack outputs along the time dimension
         return outputs, mem_histories
 
-    def _forward_one_step(self, x, t):
+    def _forward_one_step(self, xt, t):
         """
         Perform a forward pass for one time step.
-        X shape -> B, T, C, H, W
+        X shape -> B, C, H, W
         t -> current time step index
         It should only process the input for the current time step `t`.
         """
@@ -43,7 +48,7 @@ class BaseSNN(nn.Module):
         mem_histories = {}
         for name, module in self.named_modules():
             if isinstance(module, snn.Leaky):
-                mem_histories[name] = []
+                mem_histories[name] = [None] # Placeholder for initial zero state
         return mem_histories
     
     def reset_memories(self):
@@ -69,12 +74,13 @@ class BaseSNN(nn.Module):
         The format is Batch x Time x Channels x Height x Width.
         """
         for name in mem_histories:
+            mem_histories[name][0] = torch.zeros_like(mem_histories[name][1]) # insert zeros for timestep 0.
             mem_histories[name] = torch.stack(mem_histories[name], dim=0).transpose(1, 0)
     
     def restore_membrane_states(self, mem_histories, timestep):
         """
         Restore the membrane states of the Leaky Integrate-and-Fire layers
-        to the state at a specific time step.
+        to the state at a specific time step. t-> 0 yields a state of 0 membrane potentials.
         mem_histories: Dictionary containing membrane histories across batches and time.
         Restores to the given timestep INDEX. so if timestep=0, it restores to the initial state.
         """

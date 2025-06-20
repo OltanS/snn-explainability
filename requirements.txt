@@ -14,3 +14,4 @@ ttach
 scikit-learn
 av
 ipywidgets
+notebook

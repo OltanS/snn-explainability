@@ -7,11 +7,13 @@ import snntorch.functional as SF
 def apply_criterion(criterion, output, labels):
     # output will by default be of shape (B, T, num_classes)
     # print(f"Output shape: {output.shape}")
+    # print(f"labels shape: {labels.shape}")
     # print(f"Example output of first item of batch, last timestep: {output[0, -1, :]}")
     # print(f"Highest value across all timesteps: {output.max().item()}")
     if isinstance(criterion, torch.nn.CrossEntropyLoss):
         # For CrossEntropyLoss, output should be raw logits and labels should be class indices
-        outputs = output.sum(dim=1)  # sum over time, so output shape becomes (B, num_classes)
+        outputs = output.mean(dim=1)
+        # print(f"Outputs are {outputs}")
         return criterion(outputs, labels)
 
     # Time first losses from here down
@@ -45,6 +47,7 @@ def run_epoch(model, loader, local_rank, epoch, optimizer, criterion, mode):
             
             if mode == "TRAIN":
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
         
         avg_epoch_loss = epoch_loss / len(loader)

@@ -1,9 +1,11 @@
 from models.basicsnn import BasicSNN
 from models.spiking_vgg11 import SpikingVGG11
+from models.sew_resnet import SEWResnet
 
 model_to_name = {
     BasicSNN: "basic_snn",
-    SpikingVGG11: "vgg11"
+    SpikingVGG11: "vgg11",
+    SEWResnet: "resnet"
 }
 
 name_to_model = {v: k for k, v in model_to_name.items()}
