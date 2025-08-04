@@ -77,16 +77,21 @@ class BaseSNN(nn.Module):
             mem_histories[name][0] = torch.zeros_like(mem_histories[name][1]) # insert zeros for timestep 0.
             mem_histories[name] = torch.stack(mem_histories[name], dim=0).transpose(1, 0)
     
-    def restore_membrane_states(self, mem_histories, timestep):
+    def restore_membrane_states(self, mem_histories, timestep, repeat_factor=1):
         """
         Restore the membrane states of the Leaky Integrate-and-Fire layers
         to the state at a specific time step. t-> 0 yields a state of 0 membrane potentials.
         mem_histories: Dictionary containing membrane histories across batches and time.
         Restores to the given timestep INDEX. so if timestep=0, it restores to the initial state.
+        repeat_factor: Number of times to repeat the membrane states along the batch dimension.
+                       Used when processing multiple channels in parallel.
         """
         for name, module in self.named_modules():
             if isinstance(module, snn.Leaky) and name in mem_histories:
-                module.mem = mem_histories[name][:, timestep].clone()
+                # print(f"{module} mem before had shape {module.mem.shape}")
+                mem_state = mem_histories[name][:, timestep].clone()
+                module.mem = mem_state.repeat_interleave(repeat_factor, dim=0)
+                # print(f"{module} mem now has shape {module.mem.shape}")
     
     def forward_from_state(self, x, timestep, mem_histories):
         """

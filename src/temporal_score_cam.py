@@ -10,58 +10,99 @@ class TemporalScoreCAM:
     - Score is determined by the change of membrane potential between timesteps,
     We can compute this in one go per channel by passing the masked input through the network
     and then computing how much it increases the membrane potential.
+
+    Criterion_method:
+    - "mean": use the mean membrane potential change across all timesteps.
+    - "max": use the maximum membrane potential change across all timesteps.
+    - "last": use the membrane potential change at the last timestep.
+
+    This should match the way the criterion is applied in the training loop.
     """
-    def __init__(self, snn_model : BaseSNN, threshold=1.0):
+    def __init__(self, snn_model : BaseSNN, threshold=1.0, criterion_method="mean"):
         self.threshold = threshold
         self.snn_model = snn_model
+        self.criterion_method = criterion_method
 
-    def get_cam_weights(self, input_tensor, activations):
+    def compute_score(self, outputs):
+        '''
+        Computes the per-class scores based on the outputs.
+        If criterion_method is "mean", it does this according to the mean of the logits.
+        '''
+        if self.criterion_method == "mean":
+            # mean across time
+            return outputs.mean(dim=-2)
+        elif self.criterion_method == "max":
+            # max across time
+            return outputs.max(dim=-2).values
+        elif self.criterion_method == "last":
+            # last timestep
+            return outputs[..., -1, :]
+        else:
+            raise ValueError(f"Unsupported criterion method: {self.criterion_method}.")
+        
+    def get_cam_weights(self, input_tensor, activations, forward_pass_outputs):
         '''
         input tensor -> input into the network, unaltered, b, t, c, h, w
         activations -> activations of the target layer, b, t, c', h', w'
+        '''
 
         '''
+        Strategy: For each timestep:
+        - Restore membrane potentail to that timestep
+        - Complete the forward pass, replacing that timestep's input with an input of zeroes.
+        - Compute the score. (This is the STATE score).
+
+            For each channel:
+                - Complete the forward pass, replacing that timestep's input with the channel-masked input.
+                - Compute the score. (This is the STATE + Channel input score).
+                - Compute the difference between the two scores, this is the channel score.
+        
+        Returns:
+        - weights of shape (BATCH, TIME, NUM_CHANNELS, NUM_CLASSES)
+        '''
+        print("Begin computing CAM weights...")
         input_channels = input_tensor.shape[2]  # Input channels
+
+        print("Computing masked inputs...")
         with torch.no_grad():
             batch_size, timesteps, num_channels, _, _ = activations.shape # b, t, c_out, h', w'
             upsampled_activations = self.upsample_activations(activations, input_tensor, normalize=True) # b, t, c_out, h, w
             
-            # time-chanel masked inputs
-            CHANNEL_BATCH_SIZE = 16
             masked_inputs = []
-            for c_batch_idx in range(0, num_channels, CHANNEL_BATCH_SIZE):
-                c_end_idx = min(c_batch_idx + CHANNEL_BATCH_SIZE, num_channels)
-                batch_channels = list(range(c_batch_idx, c_end_idx))
-
-                for c in batch_channels:
-                    mask = upsampled_activations[:, :, c:c+1].repeat(1, 1, input_channels, 1, 1)
-                    masked_inputs.append(input_tensor * mask) # b, t, c, h, w
+            # time-chanel masked inputs
+            for c in range(num_channels):
+                mask = upsampled_activations[:, :, c:c+1].repeat(1, 1, input_channels, 1, 1)
+                masked_inputs.append(input_tensor * mask) # b, t, c, h, w
         
-            stacked_masked_inputs = torch.stack(masked_inputs, dim=0) # c_out, B, t, c, h, w 
+            stacked_masked_inputs = torch.stack(masked_inputs, dim=0) # c_out, b, t, c, h, w
+            print("Done computing masked inputs.")
             # acquire baseline per-timestep outputs as well as memories
-            baseline_outputs, mem_histories = self.snn_model(input_tensor)  # (BATCH, TIME, NUM_CLASSES) for out_vals
-            # problem! membrane states assume the b, c', h', w' don't change.
-            # But we want to push B * c_out, t, c, h, w through, which would not work.
-            # We could broadcast the memory into B * c_out, t, c, h, w, but for now
-            # likely best to just loop...
-            all_scores = []
-            for t in range(timesteps):
-                channel_scores = []
-                # restore the membrane states for the current timestep
-                for c in range(stacked_masked_inputs.shape[0]):
-                    self.snn_model.restore_membrane_states(mem_histories, t)
-                    one_channel_masked_batched = stacked_masked_inputs[c]
-                    # these are the output for all the c_out channel masked items in the batch that correspond to the timestep
-                    # they are of shape b, num_classes
-                    outputs = self.snn_model._forward_one_step(one_channel_masked_batched[:, t], t) # b, num_classes
-                    baseline = baseline_outputs[:, t] # b, num_classes
-                    scores = outputs - baseline
-                    channel_scores.append(scores) 
-                channel_scores = torch.stack(channel_scores, dim=1) # b, num_channels, num_classes
-                all_scores.append(channel_scores)
+            baseline_outputs, mem_histories = forward_pass_outputs
 
-            all_scores = torch.stack(all_scores, dim=1) # b, t, num_channels, num_classes
-            return all_scores  #(BATCH, TIME, NUM_CHANNELS, NUM_CLASSES)
+            all_scores = []
+            CHANNEL_BATCH_SIZE = 32
+            for c_start in range(0, num_channels, CHANNEL_BATCH_SIZE):
+                print(f"Computing channel scores for channels {c_start} to {min(c_start + CHANNEL_BATCH_SIZE, num_channels)}...")
+                c_end = min(c_start + CHANNEL_BATCH_SIZE, num_channels)
+                batch_size_channels = c_end - c_start
+                current_batch_size = c_end - c_start
+
+                channel_masked_inputs = stacked_masked_inputs[c_start:c_end] # current_batch_size, b, t, c, h, w
+                channel_masked_inputs = channel_masked_inputs.view(-1, *channel_masked_inputs.shape[2:])  # (current_batch_size * b, t, c, h, w)
+
+                # forward pass with channel-masked inputs
+                full_outputs, _ = self.snn_model(channel_masked_inputs)  # (current_batch_size * b, t, num_classes)
+                batch_scores = self.compute_score(full_outputs)
+                batch_scores = batch_scores.view(current_batch_size, batch_size, -1)  # (current_batch_size, b, num_classes)
+                all_scores.append(batch_scores)
+
+            all_scores = torch.cat(all_scores, dim=0)  # (num_channels, b, num_classes)
+            all_scores = all_scores.permute(1, 0, 2)  # (b, num_channels, num_classes)
+            # same channel scores for all timesteps
+            all_scores = all_scores.unsqueeze(1).repeat(1, timesteps, 1, 1)  # (b, t, num_channels, num_classes)
+
+        print(f"All scores shape: {all_scores.shape}")
+        return all_scores  #(BATCH, TIME, NUM_CHANNELS, NUM_CLASSES)
 
     def generate_cam_(self, input_tensor, target_layer):
         '''
@@ -73,8 +114,8 @@ class TemporalScoreCAM:
         returns CAM of shape (batch_size, timesteps, height, width)
         '''
         with torch.no_grad():
-            activations = self.extract_activations(input_tensor, target_layer) # (B, T, C', H', W')
-            weights = self.get_cam_weights(input_tensor, activations) # (B, T, C', NUM_CLASSES) 
+            activations, forward_pass_outputs = self.extract_activations(input_tensor, target_layer) # (B, T, C', H', W')
+            weights = self.get_cam_weights(input_tensor, activations, forward_pass_outputs) # (B, T, C', NUM_CLASSES) 
             
             # Get dimensions
             batch_size, timesteps, num_channels, h, w = activations.shape
@@ -132,10 +173,11 @@ class TemporalScoreCAM:
         # register hook to the target layer
         handle = target_layer.register_forward_hook(hook_fn)
         # forward pass through the model
-        self.snn_model(input_tensor)
+        outputs = self.snn_model(input_tensor)
         # remove the hook
         handle.remove()
-        return torch.stack(activations, dim=1) # (BATCH, TIME, NUM_CHANNELS, HEIGHT, WIDTH)
+        stacked_activations = torch.stack(activations, dim=1)  # (BATCH, TIME, C', H', W')
+        return stacked_activations, outputs  # return activations and outputs for further processing
 
     def upsample_activations(self, activations, target_tensor, normalize=True):
         with torch.no_grad():
