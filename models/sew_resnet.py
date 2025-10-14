@@ -89,6 +89,8 @@ class SEWResnet(BaseSNN):
         self.fc = nn.Linear(512, num_classes)
         self.dropout = nn.Dropout(0.5)
 
+        # self.lif2 = self.lif_partial()
+
         self.apply(self._init_weights)
 
     def _make_layer(self, out_channels, blocks, stride=1, cnf="ADD"):
@@ -138,4 +140,5 @@ class SEWResnet(BaseSNN):
         out = out.view(B, -1)
         out = self.dropout(out)
         out = self.fc(out)
+        # out = self.lif2(out)
         return out

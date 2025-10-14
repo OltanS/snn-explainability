@@ -21,6 +21,7 @@ class BasicSNN(BaseSNN):
         self.adaptive_pool = nn.AdaptiveAvgPool2d((4, 4))
         self.fc1 = nn.Linear(64 * 4 * 4, num_classes)
         self.pool = nn.AvgPool2d(2)
+        self.lif4 = snn.Leaky(beta=beta, init_hidden=True)
         
     def _forward_one_step(self, xt, t):
         B, C, H, W = xt.shape # batch size,  number of channels(polarities), height, width
@@ -37,6 +38,7 @@ class BasicSNN(BaseSNN):
         s3 = self.lif3(c3)
         g2 = self.adaptive_pool(s3).view(B, -1)
         f  = self.fc1(g2)
+        f  = self.lif4(f)
         return f
 
 

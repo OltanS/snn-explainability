@@ -43,8 +43,19 @@ def main():
     #criterion = SF.ce_max_membrane_loss()
     model = ddp_model(model, config["LOCAL_RANK"])
     
+    # optimizer = torch.optim.SGD(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"], momentum=0.9)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config["EPOCHS"])
+    # milestones = [m for m in sorted({int(config["EPOCHS"] * f) for f in (0.5, 0.7, 0.9)}) if 0 < m < config["EPOCHS"]]
+    # scheduler = torch.optim.lr_scheduler.MultiStepLR(
+    #     optimizer,
+    #     milestones=milestones,
+    #     gamma=0.1         # decay by factor of 10
+    # )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=config["EPOCHS"],
+        eta_min=1e-6
+    )
 
     print(f"Total Epochs to run: {config['EPOCHS']}")
     for epoch in range(config["EPOCHS"]):

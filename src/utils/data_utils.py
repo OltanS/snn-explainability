@@ -5,7 +5,10 @@ import tonic
 import tonic.transforms as T
 import snntorch.spikegen as spikegen
 
+from PIL import Image
+
 import torch
+from torch.utils.data import Dataset
 from torchvision import datasets
 from torchvision.transforms import v2
 from torchvision.transforms import transforms as v1
@@ -50,14 +53,15 @@ def get_dataset_transforms(dataset_name, is_training):
     
     if dataset_name == "tiny_imagenet":
         return v2.Compose([
-            v2.Resize((80, 80)),
+            #v2.Resize((80, 80)),
             v2.ToImage(),
-            v2.RandomCrop((64, 64)),
+            #v2.RandomCrop((64, 64)),
             v2.RandomHorizontalFlip(),
-            v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-            v2.RandomRotation(degrees=10),
+            (v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1) if is_training else v2.Lambda(lambda x: x)),
+            # v2.RandomRotation(degrees=10),
             v2.ToDtype(torch.float32, scale=True),
             lambda x : spikegen.rate(x, num_steps=config["N_TIME_BINS"]),
+            v2.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
         ])
     
     elif dataset_name == "dvs_gesture":
@@ -70,7 +74,7 @@ def get_dataset_transforms(dataset_name, is_training):
             v1.RandomCrop((128, 128)),
             v1.RandomRotation(degrees=10),
             v2.ToDtype(torch.float32, scale=False), # scale doesn't seem to work well here, as the range isn't fixed
-            RandomTemporalMask(mask_ratio=config["MASK_RATIO"], temporal_dim=0, train=is_training),
+            # RandomTemporalMask(mask_ratio=config["MASK_RATIO"], temporal_dim=0, train=is_training),
         ])
     
     elif dataset_name == "ucf101":
@@ -79,10 +83,10 @@ def get_dataset_transforms(dataset_name, is_training):
             v2.ToImage(),
             v2.RandomCrop((224, 224)),
             v2.RandomHorizontalFlip(),
-            v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+            (v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1) if is_training else v2.Lambda(lambda x: x)),
             v2.RandomRotation(degrees=10),
             v2.ToDtype(torch.float32, scale=True),
-            RandomTemporalMask(mask_ratio=config["MASK_RATIO"], temporal_dim=0, train=is_training),
+            # RandomTemporalMask(mask_ratio=config["MASK_RATIO"], temporal_dim=0, train=is_training),
             lambda x: spikegen.rate(x, time_var_input=True)
         ])
     
@@ -101,7 +105,40 @@ def get_datasets(dataset_name):
         VAL_ANN = os.path.join(VAL_DIR, "val_annotations.txt")
 
         train_ds = datasets.ImageFolder(TRAIN_DIR, transform=train_transforms)
-        test_ds = datasets.ImageFolder(VAL_DIR, transform=test_transforms)
+        
+        class TinyImageNetVal(Dataset):
+            def __init__(self, root, transform=None):
+                self.root = root
+                self.transform = transform
+                images_dir = os.path.join(root, "images")
+                ann_path = os.path.join(root, "val_annotations.txt")
+
+                with open(ann_path, "r") as f:
+                    lines = [l.strip().split("\t") for l in f if l.strip()]
+                # filename -> wnid
+                fname_to_cls = {fname: wnid for (fname, wnid, *_ ) in lines}
+
+                classes = sorted(set(fname_to_cls.values()))
+                self.class_to_idx = {c: i for i, c in enumerate(classes)}
+                self.classes = classes
+
+                self.samples = []
+                for fname, wnid in fname_to_cls.items():
+                    path = os.path.join(images_dir, fname)
+                    if os.path.isfile(path):
+                        self.samples.append((path, self.class_to_idx[wnid]))
+
+            def __len__(self):
+                return len(self.samples)
+
+            def __getitem__(self, idx):
+                path, target = self.samples[idx]
+                img = Image.open(path).convert("RGB")
+                if self.transform:
+                    img = self.transform(img)
+                return img, target
+
+        test_ds = TinyImageNetVal(VAL_DIR, transform=test_transforms)
 
     elif dataset_name == "dvs_gesture":
         train_ds = tonic.datasets.DVSGesture(save_to=config["DATA_SAVE_DIR"], transform=train_transforms, train=True)
