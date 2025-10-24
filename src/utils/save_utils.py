@@ -8,7 +8,7 @@ import ipywidgets as widgets
 
 from src.utils.model_utils import get_model_name
 
-def save_model(model, directory, optimizer, epoch, loss, dataset_name, enable_bntt):
+def save_model(model, directory, optimizer, epoch, loss, dataset_name, norm_type):
     '''
     Saves the model in the given location, DELETES OLD FILES!
     args:
@@ -28,9 +28,9 @@ def save_model(model, directory, optimizer, epoch, loss, dataset_name, enable_bn
     }
     model = model.module if hasattr(model, 'module') else model  # Handle DataParallel or DistributedDataParallel
     model_name = get_model_name(model)
-    torch.save(state, f"{directory}/e{epoch + 1}_L{loss:.2f}_{dataset_name}_{model_name}_BNTT_{enable_bntt}.pth")
+    torch.save(state, f"{directory}/e{epoch + 1}_L{loss:.2f}_{dataset_name}_{model_name}_norm_{norm_type}.pth")
 
-def load_model(model, path_or_dir, dataset_name, optimizer=None):
+def load_model(model, path_or_dir, dataset_name, optimizer=None, device=None):
     """
     Loads the model from either:
       • a single file (if path_or_dir is a file), or
@@ -40,6 +40,7 @@ def load_model(model, path_or_dir, dataset_name, optimizer=None):
       path_or_dir: str, path to a model‐file or a directory to scan
       model:       nn.Module to load weights into
       optimizer:   optional torch.optim to restore state
+      device:      optional torch.device to map all tensors onto (e.g., cuda:local_rank)
     returns:
       (epoch, loss)
     """
@@ -62,8 +63,11 @@ def load_model(model, path_or_dir, dataset_name, optimizer=None):
         model_file = max(model_files, key=os.path.getctime)
 
     print(f"Loading model from {model_file}")
-    # load checkpoint
-    if not torch.cuda.is_available():
+
+    # load checkpoint with proper device mapping
+    if device is not None:
+        ckpt = torch.load(model_file, map_location=device)
+    elif not torch.cuda.is_available():
         ckpt = torch.load(model_file, map_location="cpu")
     else:
         ckpt = torch.load(model_file)
@@ -74,8 +78,15 @@ def load_model(model, path_or_dir, dataset_name, optimizer=None):
         sd = {k.replace("module.", ""): v for k, v in sd.items()}
 
     model.load_state_dict(sd)
+
     if optimizer is not None and "optimizer_state_dict" in ckpt:
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        # move optimizer state tensors to the target device if provided
+        if device is not None:
+            for state in optimizer.state.values():
+                for k, v in state.items():
+                    if torch.is_tensor(v):
+                        state[k] = v.to(device)
 
     return ckpt.get("epoch"), ckpt.get("loss")
 

@@ -1,6 +1,7 @@
 import os
 from dotenv import dotenv_values
 from pathlib import Path
+import warnings
 
 def setup_config_dictionary(env_path="config.env"):
     '''
@@ -47,4 +48,5 @@ def setup_config_dictionary(env_path="config.env"):
 
     all_keys["LOCAL_RANK"] = int(os.getenv("LOCAL_RANK", 0))
     all_keys["GLOBAL_RANK"] = int(os.getenv("RANK", 0))
+    
     return all_keys

@@ -91,7 +91,7 @@ class SNNGradCAM:
         self.model.zero_grad(set_to_none=True)
 
         # Forward: collect activations (and bind grad hooks) per time step
-        outputs, _ = self.model(x)  # (B, T, num_classes)
+        outputs = self.model(x)  # (B, T, num_classes)
         B, T, num_classes = outputs.shape
         assert len(self._acts) == T, "Hooked activations count must equal time steps."
         assert len(self._grads) == 0, "Unexpected gradients captured before backward."

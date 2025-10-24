@@ -1,4 +1,3 @@
-import warnings
 from functools import partial
 
 import torch
@@ -6,7 +5,7 @@ import torch.nn as nn
 import snntorch as snn
 
 from models.base_snn import BaseSNN
-from models.model_utils import BatchNorm2dTTWrapper
+from models.norms import make_norm2d_factory
 
 def sew_function(x: torch.Tensor, y: torch.Tensor, cnf:str):
     if cnf == 'ADD':
@@ -23,17 +22,17 @@ class BasicBlock(BaseSNN):
     def __init__(self, in_channels, out_channels, lif, norm, stride=1, downsample=None, cnf="ADD"):
         super(BasicBlock, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = norm(input_features=out_channels)
+        self.norm1 = norm(channels=out_channels)
         self.lif1 = lif()
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = norm(input_features=out_channels)
+        self.norm2 = norm(channels=out_channels)
         self.lif2 = lif()
         self.stroke = stride
         self.cnf = cnf
         self.downsample = downsample
 
         if downsample is not None:
-            self.downsample_norm = norm(input_features=out_channels)
+            self.downsample_norm = norm(channels=out_channels)
             self.downsample_lif = lif()
 
     def _forward_one_step(self, xt, t):
@@ -45,11 +44,11 @@ class BasicBlock(BaseSNN):
             identity = self.downsample_lif(identity)
       
         c1 = self.conv1(xt)
-        b1 = self.bn1[t](c1)
+        b1 = self.norm1[t](c1)
         s1 = self.lif1(b1)
 
         c2 = self.conv2(s1)
-        b2 = self.bn2[t](c2)
+        b2 = self.norm2[t](c2)
         s2 = self.lif2(b2)
 
         out = sew_function(identity, s2, self.cnf)
@@ -61,13 +60,9 @@ class SEWResnet(BaseSNN):
     SNNtorch implementation of the SEW-ResNet 34 architecture, as described in:
     https://github.com/fangwei123456/spikingjelly/blob/master/spikingjelly/activation_based/model/sew_resnet.py
     '''
-    def __init__(self, num_classes, num_channels, time_steps, beta, enable_bntt):
+    def __init__(self, num_classes, num_channels, time_steps, beta, norm_type):
         super(SEWResnet, self).__init__()
-        if enable_bntt:
-            self.norm_partial = partial(snn.BatchNormTT2d, time_steps=time_steps)
-        else:
-            warnings.warn("BNTT disabled, using nn.BatchNorm instead.", UserWarning)
-            self.norm_partial = partial(BatchNorm2dTTWrapper, time_steps=time_steps)
+        self.norm_partial = make_norm2d_factory(norm_type, time_steps=time_steps)
         blocks = [3, 4, 6, 3]
         self.in_channels = 64
 
@@ -75,7 +70,7 @@ class SEWResnet(BaseSNN):
 
         # initial conv layer
         self.conv1 = nn.Conv2d(num_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = self.norm_partial(input_features=64)
+        self.norm1 = self.norm_partial(channels=64)
         self.lif1 = self.lif_partial()
         # lets do an avgpool over a maxpool, since maxpools aren't so meaningful in SNNs.
         self.avgpool1 = nn.AvgPool2d(kernel_size=3, stride=2, padding=1)
@@ -88,8 +83,6 @@ class SEWResnet(BaseSNN):
         self.avgpool2 = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512, num_classes)
         self.dropout = nn.Dropout(0.5)
-
-        # self.lif2 = self.lif_partial()
 
         self.apply(self._init_weights)
 
@@ -128,7 +121,7 @@ class SEWResnet(BaseSNN):
     def _forward_one_step(self, xt, t):
         B, C, H, W = xt.shape
         out = self.conv1(xt)
-        out = self.bn1[t](out)
+        out = self.norm1[t](out)
         out = self.lif1(out)
         out = self.avgpool1(out)
 
@@ -140,5 +133,4 @@ class SEWResnet(BaseSNN):
         out = out.view(B, -1)
         out = self.dropout(out)
         out = self.fc(out)
-        # out = self.lif2(out)
         return out

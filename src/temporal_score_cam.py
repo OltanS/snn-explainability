@@ -91,7 +91,7 @@ class TemporalScoreCAM:
                 channel_masked_inputs = channel_masked_inputs.view(-1, *channel_masked_inputs.shape[2:])  # (current_batch_size * b, t, c, h, w)
 
                 # forward pass with channel-masked inputs
-                full_outputs, _ = self.snn_model(channel_masked_inputs)  # (current_batch_size * b, t, num_classes)
+                full_outputs = self.snn_model(channel_masked_inputs)  # (current_batch_size * b, t, num_classes)
                 batch_scores = self.compute_score(full_outputs)
                 batch_scores = batch_scores.view(current_batch_size, batch_size, -1)  # (current_batch_size, b, num_classes)
                 all_scores.append(batch_scores)
@@ -213,7 +213,7 @@ class TemporalScoreCAM:
 
 # unit tests
 if __name__ == "__main__":
-    from models.basicsnn import BasicSNN
+    from models.simple_snn import SimpleSNN
     import numpy as np
     import traceback
     
@@ -227,7 +227,7 @@ if __name__ == "__main__":
         
         # Create a small BasicSNN model for testing
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = BasicSNN(num_classes=num_classes, num_channels=in_channels, time_steps=timesteps, beta=0.95, enable_bntt=False).to(device)
+        model = SimpleSNN(num_classes=num_classes, num_channels=in_channels, time_steps=timesteps, beta=0.95, enable_bntt=False).to(device)
         
         # Find the target convolutional layer (assuming it's the last conv layer)
         target_layer = None
@@ -314,7 +314,7 @@ if __name__ == "__main__":
             in_channels = 1
             height, width = 4, 4
             num_classes = 3
-            model = BasicSNN(num_classes=num_classes, num_channels=in_channels, time_steps=timesteps, beta=0.95, enable_bntt=False).to(device)
+            model = SimpleSNN(num_classes=num_classes, num_channels=in_channels, time_steps=timesteps, beta=0.95, enable_bntt=False).to(device)
             score_cam = TemporalScoreCAM(model)
             activations = score_cam.extract_activations(input_tensor, target_layer)
             weights = score_cam.get_cam_weights(input_tensor, activations) # (B, T, C', NUM_CLASSES) 

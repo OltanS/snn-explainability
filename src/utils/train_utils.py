@@ -39,7 +39,7 @@ def run_epoch(model, loader, local_rank, epoch, optimizer, criterion, mode):
             optimizer.zero_grad()
             # for models that return e.g mem_history
 
-            output, _ = model(event_batches)
+            output = model(event_batches)
             
             loss = apply_criterion(criterion, output, labels)
             epoch_loss += loss.item()

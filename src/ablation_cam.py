@@ -36,15 +36,26 @@ class FractionalAblationCAM:
         self.channel_batch_size = channel_batch_size
         self.snn_model.eval()
 
-    def extract_activations_outputs(self, input_tensor, target_layer):
+        # alternative hook
+        self._hook_into_lif = True
+
+    def extract_activations_outputs(self, input_tensor):
         activations = []
 
-        def hook_fn(module, input, output):
-            # output: (B, C, H, W) at a single time step
-            activations.append(output.detach().clone())
+        if self._hook_into_lif:
+            def pre_hook(module, input):
+                x = input[0]
+                activations.append(x.detach().clone())
+                return None
+            handle = self.target_layer.register_forward_pre_hook(pre_hook)
+        else:
+            def hook_fn(module, input, output):
+                # output: (B, C, H, W) at a single time step
+                activations.append(output.detach().clone())
 
-        handle = target_layer.register_forward_hook(hook_fn)
-        outputs, _ = self.snn_model(input_tensor) # (B, T, num_classes)
+            handle = self.target_layer.register_forward_hook(hook_fn)
+
+        outputs = self.snn_model(input_tensor) # (B, T, num_classes)
         handle.remove()
 
         return torch.stack(activations, dim=1), outputs  # Stack along time dimension, (B, T, C, H, W), (B, T, num_classes)
@@ -54,12 +65,24 @@ class FractionalAblationCAM:
         scaling_vectors: (B_rep, C) per-sample channel scaling factors.
         Applies the same scaling at every time step the target layer is invoked.
         """
-        def scaling_hook(module, inp, out):
-            # out: (B_rep, C, H, W)
-            return out * scaling_vectors[:, :, None, None]
+        if self._hook_into_lif:
+            def scaling_pre_hook(module, input):
+                # input: (B_rep, C, H, W)
+                x = input[0]
+                x_scaled = x * scaling_vectors[:, :, None, None]
+                rest = tuple(input[1:] if len(input) > 1 else ())
+                return (x_scaled, *rest)
+            
+            handle = self.target_layer.register_forward_pre_hook(scaling_pre_hook)
+            
+        else:
+            def scaling_hook(module, inp, out):
+                # out: (B_rep, C, H, W)
+                return out * scaling_vectors[:, :, None, None]
 
-        handle = self.target_layer.register_forward_hook(scaling_hook)
-        outputs, _ = self.snn_model(input_tensor)  # (B_rep, T, num_classes)
+            handle = self.target_layer.register_forward_hook(scaling_hook)
+        
+        outputs = self.snn_model(input_tensor)  # (B_rep, T, num_classes)
         handle.remove()
         return outputs
     
@@ -68,7 +91,8 @@ class FractionalAblationCAM:
         input_tensor: shape (1, T_in, C_in, H_in, W_in)
         """
         with torch.no_grad():
-            activations, baseline_outputs = self.extract_activations_outputs(input_tensor, self.target_layer)
+            activations, baseline_outputs = self.extract_activations_outputs(input_tensor)
+            self.activations = activations  # store for later use
             B, T, Cc, Hh, Ww = activations.shape
             assert B == 1
             baseline_mean = baseline_outputs.mean(dim=1)
@@ -97,7 +121,7 @@ class FractionalAblationCAM:
                         scaling[bi, ch] = frac  # retention fraction
 
                     # Expand input for G variants
-                    input_rep = input_tensor.expand(G, *input_tensor.shape[1:])
+                    input_rep = input_tensor.repeat(G, 1, 1, 1, 1)  # (G, T, C, H, W)
 
                     # Forward with channel scaling
                     ablated_outputs = self._forward_with_channel_scaling(input_rep, scaling)
@@ -120,7 +144,7 @@ class FractionalAblationCAM:
         cams = cams.view(B, T, Cc, H0, W0)
         return cams
 
-    def compute_cam(self, input_tensor, activations, importance, normalize_per_timestep=False, apply_relu=True):
+    def compute_cam(self, input_tensor, importance, normalize_per_timestep=False, apply_relu=True):
         """
         Goal:
         After getting the channel importance scores we want to create per-timestep CAMs.
@@ -130,6 +154,7 @@ class FractionalAblationCAM:
         Returns:
         cams: (T, H_in, W_in)
         """
+        activations = self.activations  # (1, T, C, H, W)
         assert activations.dim() == 5 and activations.size(0) == 1
         _, T, C, H, W = activations.shape
 
@@ -142,6 +167,11 @@ class FractionalAblationCAM:
         # print('Importances after normalization min/max:', importance_norm.min().item(), importance_norm.max().item())
         
         # multiply the activations by the normalized importance scores
+        pre_cam = (activations[0] * importance.view(1, -1, 1, 1)).sum(1)  # (T,H,W)
+        # print('min per t:', pre_cam.amin(dim=(1,2)))
+        # print('max per t:', pre_cam.amax(dim=(1,2)))
+        # print('any positive per t:', (pre_cam > 0).flatten(1).any(1))
+
         weighted = activations[0] * importance.view(1, C, 1, 1)  # (T, C, H, W)
         cams = weighted.sum(dim=1)  # (T, H, W)
         

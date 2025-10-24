@@ -73,6 +73,44 @@ def plot_combined_frames(combined_frames):
         ax[i].axis('off')
     plt.show()
 
+def plot_aggregated_cam(frames, cams, **kwargs):
+    """
+    Aggregate CAMs over time into a single heatmap and display it on the first frame.
+    Extra kwargs are forwarded to plot_cam_time_series (e.g., overlay_alpha, cmap, figsize, show, save_path).
+    """
+    # First frame (keep T=1)
+    if isinstance(frames, torch.Tensor):
+        if frames.dim() == 5:
+            frames = frames[0]          # (T,C,H,W)
+        first = frames[0:1]             # (1,C,H,W)
+    else:
+        frames = np.asarray(frames)
+        if frames.ndim == 5:
+            frames = frames[0]          # (T,C,H,W)
+        first = frames[0:1]             # (1,C,H,W)
+
+    # Aggregate CAMs: mean over time -> (H,W), then min-max normalize
+    if isinstance(cams, torch.Tensor):
+        agg = cams.mean(dim=0)
+        mn, mx = agg.min(), agg.max()
+        agg = (agg - mn) / (mx - mn + 1e-8) if (mx - mn) > 0 else torch.zeros_like(agg)
+        cams_1t = agg.unsqueeze(0)      # (1,H,W)
+    else:
+        cams = np.asarray(cams, dtype=np.float32)
+        agg = cams.mean(axis=0)
+        mn, mx = float(agg.min()), float(agg.max())
+        agg = (agg - mn) / (mx - mn + 1e-8) if (mx - mn) > 0 else np.zeros_like(agg, dtype=np.float32)
+        cams_1t = agg[None, ...]        # (1,H,W)
+
+    return plot_cam_time_series(
+        frames=first,
+        cams=cams_1t,
+        per_frame_cam_norm=False,  # already normalized
+        frame_stride=1,
+        max_frames=1,
+        **kwargs,
+    )
+
 def plot_cam_time_series(
     frames,
     cams,

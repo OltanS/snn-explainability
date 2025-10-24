@@ -20,17 +20,14 @@ class BaseSNN(nn.Module):
     
     def _forward_without_reset(self, x):
         B, T, C, H, W = x.shape # batch size, number of time bins, number of channels(polarities), height, width
-        mem_histories = self.create_mem_histories()
         outputs = []
         for t in range(T):
             xt = x[:,t]
             f = self._forward_one_step(xt, t)
             outputs.append(f)
-            self.collect_memories(mem_histories)
 
-        self.format_mem_histories(mem_histories)
         outputs = torch.stack(outputs, dim=1)  # Stack outputs along the time dimension
-        return outputs, mem_histories
+        return outputs
 
     def _forward_one_step(self, xt, t):
         """
@@ -41,16 +38,6 @@ class BaseSNN(nn.Module):
         """
         raise NotImplementedError("This method should be implemented in subclasses.")
     
-    def create_mem_histories(self):
-        """
-        Create a dictionary to store membrane potential histories for each layer.
-        """
-        mem_histories = {}
-        for name, module in self.named_modules():
-            if isinstance(module, snn.Leaky):
-                mem_histories[name] = [None] # Placeholder for initial zero state
-        return mem_histories
-    
     def reset_memories(self):
         """
         Reset the membrane potentials of all Leaky Integrate-and-Fire layers.
@@ -58,47 +45,3 @@ class BaseSNN(nn.Module):
         for name, module in self.named_modules():
             if isinstance(module, snn.Leaky):
                 module.reset_mem()
-    
-    def collect_memories(self, mem_histories):
-        """
-        Collect the membrane potentials from each Leaky Integrate-and-Fire layer
-        at each time step and store them in the provided dictionary.
-        """
-        for name, module in self.named_modules():
-            if isinstance(module, snn.Leaky):
-                mem_histories[name].append(module.mem.detach().clone())
-
-    def format_mem_histories(self, mem_histories):
-        """
-        Convert the membrane potential histories to a tensor format.
-        The format is Batch x Time x Channels x Height x Width.
-        """
-        for name in mem_histories:
-            mem_histories[name][0] = torch.zeros_like(mem_histories[name][1]) # insert zeros for timestep 0.
-            mem_histories[name] = torch.stack(mem_histories[name], dim=0).transpose(1, 0)
-    
-    def restore_membrane_states(self, mem_histories, timestep, repeat_factor=1):
-        """
-        Restore the membrane states of the Leaky Integrate-and-Fire layers
-        to the state at a specific time step. t-> 0 yields a state of 0 membrane potentials.
-        mem_histories: Dictionary containing membrane histories across batches and time.
-        Restores to the given timestep INDEX. so if timestep=0, it restores to the initial state.
-        repeat_factor: Number of times to repeat the membrane states along the batch dimension.
-                       Used when processing multiple channels in parallel.
-        """
-        for name, module in self.named_modules():
-            if isinstance(module, snn.Leaky) and name in mem_histories:
-                # print(f"{module} mem before had shape {module.mem.shape}")
-                mem_state = mem_histories[name][:, timestep].clone()
-                module.mem = mem_state.repeat_interleave(repeat_factor, dim=0)
-                # print(f"{module} mem now has shape {module.mem.shape}")
-    
-    def forward_from_state(self, x, timestep, mem_histories):
-        """
-        Given membrane histories and a specific timestep,
-        restore the membrane states and perform the forward pass from that state.
-        x -> batch_size, time_steps, channels, height, width
-        """
-        self.restore_membrane_states(mem_histories, timestep)
-        return self._forward_without_reset(x)
-        

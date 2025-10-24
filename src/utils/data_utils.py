@@ -1,6 +1,7 @@
 import os
 import random
 
+from networkx import config
 import tonic
 import tonic.transforms as T
 import snntorch.spikegen as spikegen
@@ -14,67 +15,58 @@ from torchvision.transforms import v2
 from torchvision.transforms import transforms as v1
 
 from src.utils.config_utils import setup_config_dictionary
-
-class RandomTemporalMask:
-    '''
-    Inspired by the augmentation shown in the supplemental material of "Deep Residual Learning in Spiking Neural Networks",
-    this augmentation randomly 0's out some of the input frames.
-    This option is chosen over one that deletes to keep the input dimensions consistent.
-    '''
-    def __init__(self, mask_ratio, temporal_dim=0, train=True):
-        self.mask_ratio = mask_ratio
-        self.temporal_dim = temporal_dim
-        self.train = train
-        self.mask_value=0.0
-
-    def __call__(self, x):
-        if not self.train:
-            return x
-
-        T = x.shape[self.temporal_dim]
-        num_to_mask = int(T * self.mask_ratio)
-
-
-        # Check if input is a PyTorch tensor or NumPy array
-        if hasattr(x, 'clone'):  # PyTorch tensor
-            masked_x = x.clone()
-        else:  # NumPy array
-            masked_x = x.copy()
-
-        mask_indices = random.sample(range(T), num_to_mask)
-        index_list = [slice(None)] * len(x.shape)
-        index_list[self.temporal_dim] = mask_indices
-        masked_x[tuple(index_list)] = self.mask_value
-        
-        return masked_x
     
-def get_dataset_transforms(dataset_name, is_training):
+def get_dataset_transforms(dataset_name, is_training, spike_transform=None):
+    '''
+    spike_transform: optional callable applied to images to produce spike inputs.
+                     If None, a sensible default using snntorch.spikegen.rate is used.
+                     Allows e.g. the passing of an identity lambda for non-spiking inputs.
+    '''
+
     config = setup_config_dictionary()
     
+    if spike_transform is None:
+        if dataset_name == "ucf101":
+            spike_transform = lambda x: spikegen.rate(x, time_var_input=True)
+        else:
+            spike_transform = lambda x: spikegen.rate(x, num_steps=config["N_TIME_BINS"])
+
     if dataset_name == "tiny_imagenet":
         return v2.Compose([
-            #v2.Resize((80, 80)),
             v2.ToImage(),
-            #v2.RandomCrop((64, 64)),
+            v2.RandomResizedCrop((64, 64), scale=(0.08, 1.0), ratio=(3.0/4.0, 4.0/3.0)) if is_training else v2.Resize((64, 64)),
             v2.RandomHorizontalFlip(),
             (v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1) if is_training else v2.Lambda(lambda x: x)),
-            # v2.RandomRotation(degrees=10),
             v2.ToDtype(torch.float32, scale=True),
-            lambda x : spikegen.rate(x, num_steps=config["N_TIME_BINS"]),
-            v2.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225]),
+            spike_transform,
+        ])
+    
+    elif dataset_name == "nmnist":
+        # this is 34 x 34.
+        sensor_size = tonic.datasets.NMNIST.sensor_size
+        return v2.Compose([
+            T.Denoise(filter_time=10000),
+            T.ToFrame(sensor_size=sensor_size, n_time_bins=config["N_TIME_BINS"]),
+            v2.Lambda(lambda x: torch.from_numpy(x)),
+            v2.ToDtype(torch.float32, scale=False),
+        ])
+
+    elif dataset_name == "cifar10_dvs":
+        sensor_size = tonic.datasets.CIFAR10DVS.sensor_size
+        return v2.Compose([
+            T.Denoise(filter_time=10000),
+            T.ToFrame(sensor_size=sensor_size, n_time_bins=config["N_TIME_BINS"]),
+            v2.Lambda(lambda x: torch.from_numpy(x)),
+            v2.ToDtype(torch.float32, scale=False),
         ])
     
     elif dataset_name == "dvs_gesture":
         sensor_size = tonic.datasets.DVSGesture.sensor_size
         return v2.Compose([
-            #T.Denoise(filter_time=10000),
+            T.Denoise(filter_time=10000),
             T.ToFrame(sensor_size=sensor_size, n_time_bins=config["N_TIME_BINS"]),
             v2.Lambda(lambda x: torch.from_numpy(x)),
-            v1.Resize((160,160)),
-            v1.RandomCrop((128, 128)),
-            v1.RandomRotation(degrees=10),
-            v2.ToDtype(torch.float32, scale=False), # scale doesn't seem to work well here, as the range isn't fixed
-            # RandomTemporalMask(mask_ratio=config["MASK_RATIO"], temporal_dim=0, train=is_training),
+            v2.ToDtype(torch.float32, scale=False),
         ])
     
     elif dataset_name == "ucf101":
@@ -86,17 +78,16 @@ def get_dataset_transforms(dataset_name, is_training):
             (v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1) if is_training else v2.Lambda(lambda x: x)),
             v2.RandomRotation(degrees=10),
             v2.ToDtype(torch.float32, scale=True),
-            # RandomTemporalMask(mask_ratio=config["MASK_RATIO"], temporal_dim=0, train=is_training),
-            lambda x: spikegen.rate(x, time_var_input=True)
+            spike_transform
         ])
     
     else:
         raise ValueError(f"Dataset {dataset_name} is not implemented.")
 
-def get_datasets(dataset_name):
+def get_datasets(dataset_name, spike_transform=None):
     config = setup_config_dictionary()
-    train_transforms = get_dataset_transforms(dataset_name, is_training=True)
-    test_transforms = get_dataset_transforms(dataset_name, is_training=False)
+    train_transforms = get_dataset_transforms(dataset_name, is_training=True, spike_transform=spike_transform)
+    test_transforms = get_dataset_transforms(dataset_name, is_training=False, spike_transform=spike_transform)
     if dataset_name == "tiny_imagenet":
         DATA_DIR = config["DATA_SAVE_DIR"] + "/tiny-imagenet-200"
         TRAIN_DIR = os.path.join(DATA_DIR, "train")
@@ -139,6 +130,20 @@ def get_datasets(dataset_name):
                 return img, target
 
         test_ds = TinyImageNetVal(VAL_DIR, transform=test_transforms)
+
+    elif dataset_name == "nmnist":
+        train_ds = tonic.datasets.NMNIST(save_to=config["DATA_SAVE_DIR"], transform=train_transforms, train=True)
+        test_ds = tonic.datasets.NMNIST(save_to=config["DATA_SAVE_DIR"], transform=test_transforms, train=False)
+
+    elif dataset_name == "cifar10_dvs":
+        # assumes same transforms for train and test, which currently is the case.
+        full_ds = tonic.datasets.CIFAR10DVS(save_to=config["DATA_SAVE_DIR"], transform=train_transforms)
+        n_train = int(0.8 * len(full_ds))
+        n_val = len(full_ds) - n_train
+
+        # deterministic split of the dataset
+        generator = torch.Generator().manual_seed(42)
+        train_ds, test_ds = torch.utils.data.random_split(full_ds, [n_train, n_val], generator=generator)
 
     elif dataset_name == "dvs_gesture":
         train_ds = tonic.datasets.DVSGesture(save_to=config["DATA_SAVE_DIR"], transform=train_transforms, train=True)
@@ -184,11 +189,11 @@ def get_datasets(dataset_name):
         
     return train_ds, test_ds
 
-def get_dataloaders(dataset_name, batch_size, on_ddp=False):
+def get_dataloaders(dataset_name, batch_size, on_ddp=False, spike_transform=None):
     '''
     Dataloaders always load data of shape batch_size x time_bins x num_polarities x height x width
     '''
-    train_ds, test_ds = get_datasets(dataset_name)
+    train_ds, test_ds = get_datasets(dataset_name, spike_transform=spike_transform)
     
     if on_ddp:
         from torch.utils.data.distributed import DistributedSampler
@@ -204,10 +209,12 @@ def get_dataloaders(dataset_name, batch_size, on_ddp=False):
         batch_size=batch_size, 
         shuffle=(train_sampler is None), 
         collate_fn=tonic.collation.PadTensors(), 
-        num_workers=2, 
-        pin_memory=False, 
+        num_workers=4,
+        prefetch_factor=5,
+        persistent_workers=True,
+        # pin_memory=True,
         sampler=train_sampler,
-        drop_last=True
+        drop_last=True,
     )
     
     test_loader = torch.utils.data.DataLoader(
@@ -215,10 +222,11 @@ def get_dataloaders(dataset_name, batch_size, on_ddp=False):
         batch_size=batch_size, 
         shuffle=(test_sampler is None), 
         collate_fn=tonic.collation.PadTensors(), 
-        num_workers=2, 
-        pin_memory=False, 
+        num_workers=4,
+        prefetch_factor=5,
+        persistent_workers=True,
+        # pin_memory=True,
         sampler=test_sampler,
-        drop_last=True
     )
     
     return train_loader, test_loader 
@@ -231,14 +239,7 @@ if __name__ == "__main__":
     from PIL import Image
     import random
     config = setup_config_dictionary()
-    # test temporal mask
-    def test_temporal_mask():
-        x = torch.randn(1, 10, 3, 4, 4)  # B, T, C, H, W
-        mask = RandomTemporalMask(mask_ratio=0.5, temporal_dim=1, train=True)
-        masked_x = mask(x)
-        print(x[0])
-        print(masked_x[0])
-    
+
     def test_dvs_transforms():
         dataset_name = "dvs_gesture"
         out_dir = f"img/{dataset_name}"
