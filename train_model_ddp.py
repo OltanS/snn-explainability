@@ -74,11 +74,36 @@ def main():
     #     milestones=milestones,
     #     gamma=0.1         # decay by factor of 10
     # )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     optimizer,
+    #     T_max=config["EPOCHS"],
+    #     eta_min=1e-6
+    # )
+
+    # --- Add 10% linear warmup followed by cosine annealing ---
+    warmup_epochs = max(1, int(0.1 * config["EPOCHS"]))
+    # ensure warmup < total epochs
+    if warmup_epochs >= config["EPOCHS"]:
+        warmup_epochs = max(1, config["EPOCHS"] - 1)
+
+    # linear warmup: scale from 0 -> 1 over warmup_epochs
+    def _warmup_lr_lambda(epoch):
+        return float(epoch + 1) / float(warmup_epochs)
+
+    warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_warmup_lr_lambda)
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
-        T_max=config["EPOCHS"],
+        T_max=max(1, config["EPOCHS"] - warmup_epochs),
         eta_min=1e-6
     )
+
+    # Sequentially apply warmup then cosine (switch after warmup_epochs)
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs]
+    )
+
     start_epoch = 0
 
     if CONTINUE_FROM_CHECKPOINT:

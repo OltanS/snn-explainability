@@ -34,10 +34,10 @@ def get_dataset_transforms(dataset_name, is_training, spike_transform=None):
     if dataset_name == "tiny_imagenet":
         return v2.Compose([
             v2.ToImage(),
+            v2.ToDtype(torch.float32, scale=True),
             v2.RandomResizedCrop((64, 64), scale=(0.08, 1.0), ratio=(3.0/4.0, 4.0/3.0)) if is_training else v2.Resize((64, 64)),
             v2.RandomHorizontalFlip(),
             (v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1) if is_training else v2.Lambda(lambda x: x)),
-            v2.ToDtype(torch.float32, scale=True),
             spike_transform,
         ])
     
@@ -58,6 +58,8 @@ def get_dataset_transforms(dataset_name, is_training, spike_transform=None):
             T.ToFrame(sensor_size=sensor_size, n_time_bins=config["N_TIME_BINS"]),
             v2.Lambda(lambda x: torch.from_numpy(x)),
             v2.ToDtype(torch.float32, scale=False),
+            v2.RandomHorizontalFlip() if is_training else v2.Lambda(lambda x: x),
+            v2.RandomVerticalFlip() if is_training else v2.Lambda(lambda x: x),
         ])
     
     elif dataset_name == "dvs_gesture":
