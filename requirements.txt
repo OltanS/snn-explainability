@@ -2,7 +2,8 @@ python-dotenv
 tonic
 numpy
 matplotlib
-snntorch
+spikingjelly
+cupy
 torch
 torchvision>=0.14.0, < 0.24
 ipykernel

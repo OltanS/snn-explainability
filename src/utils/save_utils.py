@@ -8,7 +8,7 @@ import ipywidgets as widgets
 
 from src.utils.model_utils import get_model_name
 
-def save_model(model, directory, optimizer, epoch, loss, dataset_name, norm_type):
+def save_model(model, directory, optimizer, epoch, loss, dataset_name):
     '''
     Saves the model in the given location, DELETES OLD FILES!
     args:
@@ -28,7 +28,7 @@ def save_model(model, directory, optimizer, epoch, loss, dataset_name, norm_type
     }
     model = model.module if hasattr(model, 'module') else model  # Handle DataParallel or DistributedDataParallel
     model_name = get_model_name(model)
-    torch.save(state, f"{directory}/e{epoch + 1}_L{loss:.2f}_{dataset_name}_{model_name}_norm_{norm_type}.pth")
+    torch.save(state, f"{directory}/e{epoch + 1}_L{loss:.2f}_{dataset_name}_{model_name}.pth")
 
 def load_model(model, path_or_dir, dataset_name, optimizer=None, device=None):
     """

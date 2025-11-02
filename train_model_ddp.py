@@ -1,11 +1,13 @@
 import warnings
-import os
+
 warnings.filterwarnings("ignore", message=".*video decoding and encoding capabilities.*deprecated.*", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*pts_unit", category=UserWarning)
 
+from networkx import config
 import torch
 import torch.nn as nn
-import snntorch.functional as SF
+
+from spikingjelly.activation_based import neuron, surrogate, functional
 
 from src.utils.config_utils import setup_config_dictionary
 from src.utils.save_utils import save_model, load_model
@@ -14,33 +16,21 @@ from src.utils.data_utils import get_dataloaders
 from src.utils.model_utils import get_model
 from src.utils.train_utils import run_epoch
 
+'''
+This must always be run with DDP enabled, even if on a single node, via torchrun.
+''' 
 def main():
     CONTINUE_FROM_CHECKPOINT = False
-    '''
-    This must always be run with DDP enabled, even if on a single node, via torchrun.
-    ''' 
+    
+    
     config = setup_config_dictionary()
     ddp_setup(config["LOCAL_RANK"])
     device = torch.device(f"cuda:{config['LOCAL_RANK']}")
 
     # Warn on unconventional/unknown normalization choices per model
-    model = config.get("MODEL_NAME", "").lower()
-    norm  = config.get("NORM_TYPE", "").lower()
+    model_name = config.get("MODEL_NAME", "").lower()
 
-    print(f"Training on DATASET={config.get('DATASET_NAME')} MODEL_NAME={model} with NORM_TYPE={norm}\nlearning rate={config.get('LEARNING_RATE')}, weight decay={config.get('WEIGHT_DECAY')}, beta={config.get('BETA')}")
-
-    conventional_norms = {
-        "vgg11": {"batchnorm", "bntt"},
-        "resnet": {"batchnorm", "bntt"},
-    }
-
-    if model in conventional_norms and norm and norm not in conventional_norms[model]:
-        conv = ", ".join(sorted(conventional_norms[model]))
-        warnings.warn(
-            f"NORM_TYPE='{norm}' is uncommon for MODEL_NAME='{model}'. This might cause performance issues, proceed with caution.\
-            Conventional choices: {conv}.",
-            RuntimeWarning,
-        )
+    print(f"Training on DATASET={config.get('DATASET_NAME')} MODEL_NAME={model_name},\nlearning rate={config.get('LEARNING_RATE')}, weight decay={config.get('WEIGHT_DECAY')}, tau={config.get('TAU')}")
 
     train_loader, test_loader = get_dataloaders(
         config["DATASET_NAME"], 
@@ -48,76 +38,50 @@ def main():
         config["ON_DDP"]
     )
 
-    # Infer number of channels from the first batch: (B, T, C, H, W)
+    # Infer number of channels from the first batch
     event_batches, _ = next(iter(train_loader))
-    num_channels = event_batches.shape[2]
+    num_channels = event_batches.shape[-3]
+    num_classes = len(train_loader.dataset.classes) if hasattr(train_loader.dataset, "classes") else len(train_loader.dataset.dataset.classes)
+    print(f"There are {num_classes} classes.")
 
     model = get_model(
         config["MODEL_NAME"],
-        num_classes=len(train_loader.dataset.classes) if hasattr(train_loader.dataset, "classes") else len(train_loader.dataset.dataset.classes),
-        num_channels=num_channels,
-        time_steps=config["N_TIME_BINS"],
-        beta=config["BETA"],
-        norm_type=config["NORM_TYPE"]
+        num_classes=num_classes,
+        in_channels=num_channels,
+        spiking_neuron=neuron.LIFNode,
+        pretrained=True,
+        tau=config["TAU"],
+        detach_reset=True,
+        surrogate_function=surrogate.ATan()
+
     )
+    functional.set_step_mode(model, 'm')
+    functional.set_backend(model, "cupy", instance=neuron.LIFNode)
 
 
-
-    criterion = nn.CrossEntropyLoss()
-    # criterion = SF.ce_max_membrane_loss()
-    
-    # optimizer = torch.optim.SGD(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"], momentum=0.9)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
-    # milestones = [m for m in sorted({int(config["EPOCHS"] * f) for f in (0.5, 0.7, 0.9)}) if 0 < m < config["EPOCHS"]]
-    # scheduler = torch.optim.lr_scheduler.MultiStepLR(
-    #     optimizer,
-    #     milestones=milestones,
-    #     gamma=0.1         # decay by factor of 10
-    # )
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    #     optimizer,
-    #     T_max=config["EPOCHS"],
-    #     eta_min=1e-6
-    # )
-
-    # --- Add 10% linear warmup followed by cosine annealing ---
-    warmup_epochs = max(1, int(0.1 * config["EPOCHS"]))
-    # ensure warmup < total epochs
-    if warmup_epochs >= config["EPOCHS"]:
-        warmup_epochs = max(1, config["EPOCHS"] - 1)
-
-    # linear warmup: scale from 0 -> 1 over warmup_epochs
-    def _warmup_lr_lambda(epoch):
-        return float(epoch + 1) / float(warmup_epochs)
-
-    warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_warmup_lr_lambda)
-    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=max(1, config["EPOCHS"] - warmup_epochs),
-        eta_min=1e-6
-    )
-
-    # Sequentially apply warmup then cosine (switch after warmup_epochs)
-    scheduler = torch.optim.lr_scheduler.SequentialLR(
-        optimizer,
-        schedulers=[warmup_scheduler, cosine_scheduler],
-        milestones=[warmup_epochs]
-    )
+    # criterion = nn.CrossEntropyLoss()
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
+    encoder = None
+    # encoder = PoissonEncoder(step_mode='m')
 
     start_epoch = 0
-
     if CONTINUE_FROM_CHECKPOINT:
         start_epoch, _ = load_model(model, config["MODEL_SAVE_DIR"], optimizer=optimizer, dataset_name=config["DATASET_NAME"], device=device)
 
     model = ddp_model(model, config["LOCAL_RANK"])
     print(f"Total Epochs to run: {config['EPOCHS']}")
     for epoch in range(start_epoch, config["EPOCHS"]):
-        avg_epoch_train_loss = run_epoch(model, train_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TRAIN")
-        avg_epoch_test_loss = run_epoch(model, test_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TEST")
-        scheduler.step()
+        if config["ON_DDP"] and hasattr(train_loader, "sampler") and train_loader.sampler is not None:
+            train_loader.sampler.set_epoch(epoch)
+        
+        avg_epoch_train_loss, avg_epoch_train_accuracy = run_epoch(model, train_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TRAIN", encoder=encoder, n_time_bins=config["N_TIME_BINS"])
+        avg_epoch_test_loss, avg_epoch_test_accuracy = run_epoch(model, test_loader, config["LOCAL_RANK"], epoch, optimizer, criterion, mode="TEST", encoder=encoder, n_time_bins=config["N_TIME_BINS"])
+        # scheduler.step()
         if (epoch + 1) % config["SAVE_EVERY_N_EPOCHS"] == 0:
             if config["GLOBAL_RANK"] == 0:
-                save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name=config["DATASET_NAME"], norm_type=config["NORM_TYPE"])
+                save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name=config["DATASET_NAME"])
+                print(f"Model checkpoint saved at epoch {epoch+1} to {config['MODEL_SAVE_DIR']}")
     ddp_cleanup()
 
 

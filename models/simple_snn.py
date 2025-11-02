@@ -1,49 +1,37 @@
+import torch
 import torch.nn as nn
-import snntorch as snn
+from spikingjelly.activation_based import layer
 
-from models.base_snn import BaseSNN
-from models.norms import make_norm2d_factory
+from copy import deepcopy
 
+class SimpleSNN(nn.Module):
+    def __init__(self, num_classes, in_channels, spiking_neuron=None, **kwargs):
+        super().__init__()
+        channels = 128
+        conv = []
+        for i in range(5):
+            conv.append(layer.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False))
+            conv.append(layer.BatchNorm2d(channels))
+            conv.append(spiking_neuron(**kwargs))
+            conv.append(layer.MaxPool2d(2, 2))
+            in_channels = channels
 
-class SimpleSNN(BaseSNN):
-    '''Simple convolutional SNN.'''
-    def __init__(self, num_classes, num_channels, time_steps, beta, norm_type):
-        super(SimpleSNN, self).__init__()
-        self.norm_partial = make_norm2d_factory(norm_type, time_steps=time_steps)
-            
-        self.conv1 = nn.Conv2d(num_channels, 32, kernel_size=3, stride=1, padding=1)
-        self.norm1   = self.norm_partial(32)
-        self.lif1 = snn.Leaky(beta=beta, init_hidden=True)
+        self.conv_fc = nn.Sequential(
+            *conv,
 
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.norm2   = self.norm_partial(64)
-        self.lif2 = snn.Leaky(beta=beta, init_hidden=True)
+            layer.Flatten(),
+            layer.Dropout(0.5),
+            layer.Linear(channels * 4 * 4, 512),
+            spiking_neuron(**kwargs),
 
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
-        self.norm3   = self.norm_partial(64)
-        self.lif3 = snn.Leaky(beta=beta, init_hidden=True)
+            layer.Dropout(0.5),
+            layer.Linear(512, num_classes * 10),
+            spiking_neuron(**kwargs),
 
-        self.fc1 = nn.Linear(64 * 4 * 4, num_classes)
-        
-        self.adaptive_pool = nn.AdaptiveAvgPool2d((4, 4))
-        self.pool = nn.AvgPool2d(2)
-        
-    def _forward_one_step(self, xt, t):
-        B, C, H, W = xt.shape # batch size,  number of channels(polarities), height, width
-        c1 = self.conv1(xt)
-        c1 = self.norm1[t](c1)
-        s1 = self.lif1(c1)
-        s1 = self.pool(s1)
+            layer.VotingLayer(voting_size=10)
+        )
 
-        c2 = self.conv2(s1)
-        c2 = self.norm2[t](c2)
-        s2 = self.lif2(c2)
-        s2 = self.pool(s2)
+        # print(self.conv_fc)
 
-        c3 = self.conv3(s2)
-        c3 = self.norm3[t](c3)
-        s3 = self.lif3(c3)
-
-        g2 = self.adaptive_pool(s3).view(B, -1)
-        f  = self.fc1(g2)
-        return f
+    def forward(self, x: torch.Tensor):
+        return self.conv_fc(x)
