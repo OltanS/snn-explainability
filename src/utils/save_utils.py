@@ -95,7 +95,6 @@ def interactive_load_model(model, directory, dataset_name, optimizer=None):
     Jupyter-friendly model loader that lets user select and load a checkpoint.
     Shows result in output widget.
     """
-    print("Make sure that both ENABLE_BNTT matches the state the model was trained with.")
     model_name = get_model_name(model)
     files = [f for f in glob.glob(os.path.join(directory, '*'))
              if dataset_name in f and model_name in f]

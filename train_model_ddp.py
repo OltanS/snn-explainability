@@ -42,7 +42,6 @@ def main():
     event_batches, _ = next(iter(train_loader))
     num_channels = event_batches.shape[-3]
     num_classes = len(train_loader.dataset.classes) if hasattr(train_loader.dataset, "classes") else len(train_loader.dataset.dataset.classes)
-    print(f"There are {num_classes} classes.")
 
     model = get_model(
         config["MODEL_NAME"],
@@ -53,7 +52,6 @@ def main():
         tau=config["TAU"],
         detach_reset=True,
         surrogate_function=surrogate.ATan()
-
     )
     functional.set_step_mode(model, 'm')
     functional.set_backend(model, "cupy", instance=neuron.LIFNode)
@@ -70,6 +68,7 @@ def main():
         start_epoch, _ = load_model(model, config["MODEL_SAVE_DIR"], optimizer=optimizer, dataset_name=config["DATASET_NAME"], device=device)
 
     model = ddp_model(model, config["LOCAL_RANK"])
+    
     print(f"Total Epochs to run: {config['EPOCHS']}")
     for epoch in range(start_epoch, config["EPOCHS"]):
         if config["ON_DDP"] and hasattr(train_loader, "sampler") and train_loader.sampler is not None:
@@ -82,8 +81,10 @@ def main():
             if config["GLOBAL_RANK"] == 0:
                 save_model(model, config["MODEL_SAVE_DIR"], optimizer, epoch, avg_epoch_test_loss, dataset_name=config["DATASET_NAME"])
                 print(f"Model checkpoint saved at epoch {epoch+1} to {config['MODEL_SAVE_DIR']}")
-    ddp_cleanup()
-
 
 if __name__ == "__main__":
-    main()
+    try:
+        torch.hub.set_dir("./torch_cache")
+        main()
+    finally:
+        ddp_cleanup()

@@ -1,8 +1,7 @@
 import torch
 import torch.nn as nn
 from spikingjelly.activation_based import layer
-
-from copy import deepcopy
+import math
 
 class SimpleSNN(nn.Module):
     def __init__(self, num_classes, in_channels, spiking_neuron=None, **kwargs):
@@ -16,6 +15,8 @@ class SimpleSNN(nn.Module):
             conv.append(layer.MaxPool2d(2, 2))
             in_channels = channels
 
+        voting_size, total_outputs = SimpleSNN._voting_and_total(num_classes)
+
         self.conv_fc = nn.Sequential(
             *conv,
 
@@ -25,13 +26,20 @@ class SimpleSNN(nn.Module):
             spiking_neuron(**kwargs),
 
             layer.Dropout(0.5),
-            layer.Linear(512, num_classes * 10),
+            layer.Linear(512, total_outputs),
             spiking_neuron(**kwargs),
 
-            layer.VotingLayer(voting_size=10)
+            layer.VotingLayer(voting_size=voting_size)
         )
 
-        # print(self.conv_fc)
+    def _voting_and_total(num_classes, s0=128, s1=512):
+        if num_classes <= s0:
+            v = 10
+        elif num_classes >= s1:
+            v = 1
+        else:
+            v = math.ceil(1 + 9 * (s1 - num_classes) / (s1 - s0))
+        return v, num_classes * v
 
     def forward(self, x: torch.Tensor):
         return self.conv_fc(x)

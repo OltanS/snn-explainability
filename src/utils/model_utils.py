@@ -1,4 +1,5 @@
 from typing import Type, Union
+import torch.nn as nn
 
 from spikingjelly.activation_based.model.sew_resnet import sew_resnet34, SEWResNet
 from models.spiking_vgg import custom_spiking_vgg11, custom_spiking_vgg11_bn, SpikingVGG

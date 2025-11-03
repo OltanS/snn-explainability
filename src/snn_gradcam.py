@@ -3,35 +3,34 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, List, Tuple, Union
 
-from models.base_snn import BaseSNN
+from spikingjelly.activation_based import neuron, surrogate, functional, layer
+
 
 class SNNGradCAM:
     """
-    Grad-CAM for Spiking Neural Networks (per time-step).
+    Grad-CAM for Spiking Neural Networks (per time-step, SpikingJelly step_mode='m').
     
-    Usage:
-      cam = SNNGradCAM(model, target_layer)
-      cams = cam.generate(x, class_idx=None, score_aggregation="mean")  # (B, T, H, W)
+    Expected input: (T, B, C, H, W)
+    Returns: (B, T, H, W)
     """
     def __init__(
         self,
-        model: BaseSNN,
+        model: nn.Module,
         target_layer: nn.Module,
         relu: bool = True,
     ):
         self.model = model
-        self.model.eval()
         self.target_layer = target_layer
         self.relu = relu
 
         self._handles: List[torch.utils.hooks.RemovableHandle] = []
-        self._acts: List[torch.Tensor] = []
-        self._grads: List[torch.Tensor] = []
+        self._acts = None
+        self._grads = None
         self._register_hooks()
 
     def _clear(self):
-        self._acts.clear()
-        self._grads.clear()
+        self._acts = None
+        self._grads = None
 
     def remove_hooks(self):
         for h in self._handles:
@@ -44,10 +43,11 @@ class SNNGradCAM:
     def _register_hooks(self):
         def fwd_hook(module, inputs, output):
             # output: (B, C, H, W) for a single time step call
-            self._acts.append(output)
+            self._acts = output
+            output.retain_grad()
             # Attach a grad hook to this specific output tensor to capture its gradient
             def grad_hook(grad):
-                self._grads.append(grad)
+                self._grads = grad
             output.register_hook(grad_hook)
 
         self._handles.append(self.target_layer.register_forward_hook(fwd_hook))
@@ -72,34 +72,34 @@ class SNNGradCAM:
 
     def generate(
         self,
-        x: torch.Tensor,
+        x: torch.Tensor,  # (T, B, C, H, W)
         class_idx: Optional[Union[int, List[int]]] = None,
-        score_aggregation: str = "mean",   # "mean" or "sum" across time
         normalize_per_timestep: bool = False,
         upsample_to_input: bool = True,
         return_numpy: bool = False,
     ) -> Union[torch.Tensor, 'np.ndarray']:
         """
-        x: (B, T, C, H, W)
-        Returns per-timestep CAMs: (B, T, H, W) at input resolution if upsample_to_input=True.
+        Returns per-timestep CAMs: (B, T, H, W).
         """
-        assert x.dim() == 5, "Expected input of shape (B, T, C, H, W)"
+        assert x.dim() == 5, "Expected input of shape (T, B, C, H, W)"
         device = next(self.model.parameters()).device
         x = x.to(device)
+        x = x.detach().requires_grad_(True)
 
         self._clear()
         self.model.zero_grad(set_to_none=True)
+        functional.reset_net(self.model)
 
         # Forward: collect activations (and bind grad hooks) per time step
-        outputs = self.model(x)  # (B, T, num_classes)
-        B, T, num_classes = outputs.shape
-        assert len(self._acts) == T, "Hooked activations count must equal time steps."
-        assert len(self._grads) == 0, "Unexpected gradients captured before backward."
+        with torch.enable_grad():
+            outputs = self.model(x) # (T, B, K)
+        T, B, num_classes = outputs.shape
+        assert self._acts is not None, "No activations captured at target layer."
 
         # Choose class index per-sample if not provided
         # Aggregate scores across time before backprop to produce time-distributed gradients
         if class_idx is None:
-            time_agg = outputs.mean(dim=1) if score_aggregation == "mean" else outputs.sum(dim=1)
+            time_agg = outputs.mean(dim=0)
             cls = time_agg.argmax(dim=1)  # (B,)
         else:
             if isinstance(class_idx, int):
@@ -109,46 +109,39 @@ class SNNGradCAM:
                 assert cls.shape[0] == B
 
         # Scalar target for backward
-        if score_aggregation == "mean":
-            target_score = outputs[torch.arange(B, device=device)[:, None], torch.arange(T, device=device)[None, :], cls[:, None]].mean()
-        elif score_aggregation == "sum":
-            target_score = outputs[torch.arange(B, device=device)[:, None], torch.arange(T, device=device)[None, :], cls[:, None]].sum()
-        else:
-            raise ValueError("score_aggregation must be 'mean' or 'sum'.")
-
+        target_score = outputs.gather(2, cls.view(1, B, 1).expand(T, B, 1)).squeeze(2).mean()
         target_score.backward()
 
-        # After backward, grads collected per forward call; convert lists to tensors in time order
-        # Each entry: (B, C, Hf, Wf)
-        acts = torch.stack(self._acts, dim=1)   # (B, T, C, Hf, Wf)
-        grads = torch.stack(self._grads, dim=1) # (B, T, C, Hf, Wf)
-        assert acts.shape == grads.shape, "Activation/gradient shape mismatch."
+        # Use the last captured act/grad (multi-step): (T, B, C, Hf, Wf)
+        acts = self._acts
+        grads = self._grads
+        assert self._grads is not None, "No gradients captured at target layer."
+        assert acts.shape == grads.shape and acts.dim() == 5, "Activation/gradient shape mismatch."
 
-        # Weights per (B, T, C): global-average pooling over spatial dims
-        weights = grads.mean(dim=(-2, -1))  # (B, T, C)
-
-        # Weighted sum over channels -> (B, T, Hf, Wf)
-        cams = (weights.unsqueeze(-1).unsqueeze(-1) * acts).sum(dim=2)
+        # Weights per (T, B, C): GAP over spatial dims
+        weights = grads.mean(dim=(-2, -1))                              # (T, B, C)
+        cams_tbhw = (weights.unsqueeze(-1).unsqueeze(-1) * acts).sum(dim=2)  # (T, B, Hf, Wf)
+        cams_bthw = cams_tbhw.permute(1, 0, 2, 3)                        # (B, T, Hf, Wf)
 
         if self.relu:
-            cams = F.relu(cams)
+            cams_bthw = F.relu(cams_bthw)
 
         # Normalize per time step (optional)
         if normalize_per_timestep:
-            cams = self._normalize_per_timestep(cams)
+            cams_bthw = self._normalize_per_timestep(cams_bthw)
 
         # Upsample to input resolution if requested
         if upsample_to_input:
             H_in, W_in = x.shape[-2], x.shape[-1]
-            cams = self._upsample_to_input(cams, (H_in, W_in))
+            cams_bthw = self._upsample_to_input(cams_bthw, (H_in, W_in))
 
         if return_numpy:
-            return cams.detach().cpu().numpy()
-        return cams  # (B, T, H, W)
+            return cams_bthw.detach().cpu().numpy()
+        return cams_bthw  # (B, T, H, W)
 
 def get_default_conv_layer(model: nn.Module) -> nn.Module:
     """Pick the deepest Conv2d by default."""
-    convs = [m for m in model.modules() if isinstance(m, nn.Conv2d)]
+    convs = [m for m in model.modules() if isinstance(m, layer.Conv2d)]
     if not convs:
-        raise ValueError("No Conv2d layers found.")
+        raise ValueError("No SpikingJelly Conv2d layers found.")
     return convs[-1]
