@@ -3,113 +3,120 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def plot_frames(frames):
-    # Accept frames in (B, H, W, C) or (B, C, H, W)
     arr = frames
-    if arr.ndim == 4:
-        # if channels are in axis=1, move to last axis
-        if arr.shape[-1] not in (1, 2, 3) and arr.shape[1] in (1, 2, 3):
-            arr = np.transpose(arr, (0, 2, 3, 1))
-    else:
+    if arr.ndim != 4:
         raise ValueError(f"Unsupported frames shape {arr.shape}, expected 4D array.")
-    
-    B, H, W, C = arr.shape
-    n_frames = B
-    num_channels = C
+    if arr.shape[-1] not in (1, 2, 3) and arr.shape[1] in (1, 2, 3):
+        arr = np.transpose(arr, (0, 2, 3, 1))
 
-    if num_channels == 1:
-        fig, axes = plt.subplots(1, n_frames, figsize=(n_frames * 3, 3), squeeze=False)
-        for i in range(n_frames):
-            frame = arr[i, :, :, 0]
-            axes[0, i].imshow(frame, cmap='gray')
+    B, H, W, C = arr.shape
+    if C == 1:
+        fig, axes = plt.subplots(1, B, figsize=(B * 3, 3), squeeze=False)
+        for i in range(B):
+            axes[0, i].imshow(arr[i, :, :, 0], cmap='gray')
             axes[0, i].set_title(f"Frame {i}")
             axes[0, i].axis('off')
-
-    elif num_channels == 2:
-        fig, axes = plt.subplots(2, n_frames, figsize=(n_frames * 3, 6), squeeze=False)
-        for i in range(n_frames):
-            off_frame = arr[i, :, :, 0]
-            on_frame  = arr[i, :, :, 1]
-            axes[0, i].imshow(off_frame, cmap='gray')
-            axes[0, i].set_title(f"Frame {i} - Polarity OFF")
-            axes[1, i].imshow(on_frame,  cmap='gray')
-            axes[1, i].set_title(f"Frame {i} - Polarity ON")
-
-    elif num_channels == 3:
-        # denormalize assuming ImageNet stats
-        mean = (0.485, 0.456, 0.406)
-        std = (0.229, 0.224, 0.225)
-        m = np.array(mean, dtype=arr.dtype).reshape(1, 1, 1, 3)
-        s = np.array(std, dtype=arr.dtype).reshape(1, 1, 1, 3)
-        arr = arr * s + m
-        fig, axes = plt.subplots(1, n_frames, figsize=(n_frames * 3, 3), squeeze=False)
-        for i in range(n_frames):
+    elif C == 2:
+        fig, axes = plt.subplots(2, B, figsize=(B * 3, 6), squeeze=False)
+        for i in range(B):
+            axes[0, i].imshow(arr[i, :, :, 0], cmap='gray')
+            axes[0, i].set_title(f"{i} - OFF")
+            axes[1, i].imshow(arr[i, :, :, 1], cmap='gray')
+            axes[1, i].set_title(f"{i} - ON")
+    elif C == 3:
+        mean = np.array((0.485, 0.456, 0.406), dtype=arr.dtype).reshape(1, 1, 1, 3)
+        std  = np.array((0.229, 0.224, 0.225), dtype=arr.dtype).reshape(1, 1, 1, 3)
+        arr = arr * std + mean
+        fig, axes = plt.subplots(1, B, figsize=(B * 3, 3), squeeze=False)
+        for i in range(B):
             axes[0, i].imshow(arr[i])
             axes[0, i].set_title(f"Frame {i}")
             axes[0, i].axis('off')
-
     else:
-        raise ValueError(f"Unsupported number of channels: {num_channels}. Expected 1, 2, or 3.")
-
+        raise ValueError(f"Unsupported number of channels: {C}.")
     plt.tight_layout()
     plt.show()
 
 def combine_polarities(frames):
-    polarity_zero = -frames[:, :, :, 0]
-    polarity_one = frames[:, :, :, 1]
-    # Take the value with the largest magnitude
-    mask = np.abs(polarity_zero) > np.abs(polarity_one)
-    combined = np.where(mask, polarity_zero, polarity_one)
-    
-    # print(combined.shape)
-    return combined
+    p0 = -frames[:, :, :, 0]
+    p1 = frames[:, :, :, 1]
+    mask = np.abs(p0) > np.abs(p1)
+    return np.where(mask, p0, p1)
 
 def plot_combined_frames(combined_frames):
-    n_frames = len(combined_frames)
-    h, w = combined_frames[0].shape
-    _, ax = plt.subplots(1, n_frames, figsize=(n_frames * 3, 3))
-    for i, combined_frame in enumerate(combined_frames):
-        ax[i].imshow(combined_frame, cmap='gray')
-        ax[i].set_title(f"Combined Polarity {i}")
+    n = len(combined_frames)
+    _, ax = plt.subplots(1, n, figsize=(n * 3, 3))
+    for i, cf in enumerate(combined_frames):
+        ax[i].imshow(cf, cmap='gray')
+        ax[i].set_title(f"Combined {i}")
         ax[i].axis('off')
     plt.show()
 
 def plot_aggregated_cam(frames, cams, **kwargs):
-    """
-    Aggregate CAMs over time into a single heatmap and display it on the first frame.
-    Extra kwargs are forwarded to plot_cam_time_series (e.g., overlay_alpha, cmap, figsize, show, save_path).
-    """
-    # First frame (keep T=1)
     if isinstance(frames, torch.Tensor):
         if frames.dim() == 5:
-            frames = frames[0]          # (T,C,H,W)
-        first = frames[0:1]             # (1,C,H,W)
+            frames = frames[0]
+        first = frames[0:1]
     else:
         frames = np.asarray(frames)
         if frames.ndim == 5:
-            frames = frames[0]          # (T,C,H,W)
-        first = frames[0:1]             # (1,C,H,W)
+            frames = frames[0]
+        first = frames[0:1]
 
-    # Aggregate CAMs: mean over time -> (H,W), then min-max normalize
     if isinstance(cams, torch.Tensor):
         agg = cams.mean(dim=0)
         mn, mx = agg.min(), agg.max()
-        agg = (agg - mn) / (mx - mn + 1e-8) if (mx - mn) > 0 else torch.zeros_like(agg)
-        cams_1t = agg.unsqueeze(0)      # (1,H,W)
+        agg = (agg - mn) / (mx - mn + 1e-8) if mx > mn else torch.zeros_like(agg)
+        cams_1t = agg.unsqueeze(0)
     else:
         cams = np.asarray(cams, dtype=np.float32)
         agg = cams.mean(axis=0)
         mn, mx = float(agg.min()), float(agg.max())
-        agg = (agg - mn) / (mx - mn + 1e-8) if (mx - mn) > 0 else np.zeros_like(agg, dtype=np.float32)
-        cams_1t = agg[None, ...]        # (1,H,W)
+        agg = (agg - mn) / (mx - mn + 1e-8) if mx > mn else np.zeros_like(agg, dtype=np.float32)
+        cams_1t = agg[None]
 
     return plot_cam_time_series(
         frames=first,
         cams=cams_1t,
-        per_frame_cam_norm=False,  # already normalized
+        per_frame_cam_norm=False,
         frame_stride=1,
         max_frames=1,
-        **kwargs,
+        show=kwargs.get("show", True),
+        save_path=kwargs.get("save_path", None),
+        overlay_alpha=kwargs.get("overlay_alpha", 0.4),
+        cmap=kwargs.get("cmap", "jet"),
+        figsize=kwargs.get("figsize", (5, 4)),
     )
+
+def _to_numpy(frames):
+    if isinstance(frames, torch.Tensor):
+        f = frames.detach().cpu()
+        if f.dim() == 5:
+            assert f.size(0) == 1
+            f = f[0]
+        return f.numpy().astype(np.float32)
+    f = np.asarray(frames, dtype=np.float32)
+    if f.ndim == 5:
+        assert f.shape[0] == 1
+        f = f[0]
+    return f
+
+def _norm_frames(frames_np):
+    T, C, _, _ = frames_np.shape
+    flat = frames_np.reshape(T, C, -1)
+    fmin = flat.min(axis=2).reshape(T, C, 1, 1)
+    fmax = flat.max(axis=2).reshape(T, C, 1, 1)
+    return ((frames_np - fmin) / (fmax - fmin + 1e-8)).clip(0, 1)
+
+def _norm_cams(cams_np, per_frame=True):
+    if per_frame:
+        out = np.empty_like(cams_np, dtype=np.float32)
+        for t in range(cams_np.shape[0]):
+            m, M = cams_np[t].min(), cams_np[t].max()
+            out[t] = (cams_np[t] - m) / (M - m + 1e-8) if M > m else 0.0
+        return out
+    m, M = cams_np.min(), cams_np.max()
+    return (cams_np - m) / (M - m + 1e-8) if M > m else np.zeros_like(cams_np, dtype=np.float32)
 
 def plot_cam_time_series(
     frames,
@@ -123,133 +130,85 @@ def plot_cam_time_series(
     per_frame_cam_norm=True,
     show=True,
     save_path=None,
+    image_rows=1,           # new: number of rows for the image grid
+    images_per_row=None,    # new: optionally fix number of images per row
 ):
-    """
-    Plot a time series of aggregated CAM weights with selected frame overlays.
-
-    frames: torch.Tensor or np.ndarray
-        Shape (T, C, H, W) or (1, T, C, H, W). C = 1 or 3.
-    cams: torch.Tensor or np.ndarray
-        Shape (T, H, W) (output of compute_cam).
-    Other args: same as before.
-    """
-    import numpy as np
-    import matplotlib.pyplot as plt
-    try:
-        import torch
-    except Exception:
-        torch = None
-
-    # Convert frames -> numpy (T,C,H,W)
-    if torch is not None and isinstance(frames, torch.Tensor):
-        if frames.dim() == 5:
-            assert frames.size(0) == 1, "Batch dimension >1 not supported."
-            frames = frames[0]
-        assert frames.dim() == 4, "Expected frames shape (T, C, H, W)."
-        frames_np = frames.detach().cpu().numpy().astype(np.float32)
-    else:
-        frames_np = np.asarray(frames, dtype=np.float32)
-        if frames_np.ndim == 5:
-            assert frames_np.shape[0] == 1, "Batch dimension >1 not supported."
-            frames_np = frames_np[0]
-        assert frames_np.ndim == 4, "Expected frames shape (T, C, H, W)."
-
+    # frames: (T,C,H,W) or (1,T,C,H,W); cams: (T,H,W)
+    frames_np = _to_numpy(frames)
+    assert frames_np.ndim == 4
     T, C, H, W = frames_np.shape
 
-    # Convert cams -> numpy (T,H,W)
-    if torch is not None and isinstance(cams, torch.Tensor):
-        cams_np = cams.detach().cpu().numpy().astype(np.float32)
-    else:
-        cams_np = np.asarray(cams, dtype=np.float32)
+    cams_np = cams.detach().cpu().numpy().astype(np.float32) if isinstance(cams, torch.Tensor) else np.asarray(cams, dtype=np.float32)
+    assert cams_np.shape[0] == T
 
-    assert cams_np.shape[0] == T, "cams time dimension mismatch."
+    frames_vis = _norm_frames(frames_np)
 
-    # Normalize frames to [0,1] per channel for visualization
-    flat = frames_np.reshape(T, C, -1)
-    f_min = flat.min(axis=2).reshape(T, C, 1, 1)
-    f_max = flat.max(axis=2).reshape(T, C, 1, 1)
-    frames_vis = ((frames_np - f_min) / (f_max - f_min + 1e-8)).clip(0, 1)
-
-    # Compute per-timestep CAM weights
+    flatc = cams_np.reshape(T, -1)
     if callable(aggregate):
-        cam_weights = aggregate(cams_np)  # expect (T,)
+        cam_weights = np.asarray(aggregate(cams_np), dtype=float)
     else:
-        flatc = cams_np.reshape(T, -1)
         if aggregate == "mean":
             cam_weights = flatc.mean(axis=1)
         elif aggregate == "max":
             cam_weights = flatc.max(axis=1)
         else:
             raise ValueError("Unknown aggregate.")
-    cam_weights = np.asarray(cam_weights).astype(float)
-
-    # Select frames for overlay
     indices = list(range(0, T, frame_stride))
     if len(indices) > max_frames:
-        lin_idx = np.linspace(0, len(indices) - 1, max_frames).round().astype(int)
-        indices = [indices[i] for i in lin_idx]
+        sel = np.linspace(0, len(indices) - 1, max_frames).round().astype(int)
+        indices = [indices[i] for i in sel]
 
-    # CAM normalization (numpy)
-    if per_frame_cam_norm:
-        cam_show = np.empty_like(cams_np, dtype=np.float32)
-        for t in range(T):
-            m = cams_np[t].min()
-            M = cams_np[t].max()
-            if (M - m) < 1e-8:
-                cam_show[t] = np.zeros_like(cams_np[t], dtype=np.float32)
-            else:
-                cam_show[t] = (cams_np[t] - m) / (M - m)
-    else:
-        gmin = cams_np.min()
-        gmax = cams_np.max()
-        if (gmax - gmin) < 1e-8:
-            cam_show = np.zeros_like(cams_np, dtype=np.float32)
-        else:
-            cam_show = (cams_np - gmin) / (gmax - gmin)
+    cam_show = _norm_cams(cams_np, per_frame_cam_norm)
 
-    # Figure layout:
     n_frames = len(indices)
+
+    # Determine grid layout
+    if images_per_row is not None and images_per_row > 0:
+        cols = max(1, min(images_per_row, n_frames))
+        rows = int(np.ceil(n_frames / cols))
+    else:
+        rows = max(1, image_rows)
+        cols = int(np.ceil(n_frames / rows))
+
+    # Auto figure size if user didn't explicitly tune it
+    auto_figsize = (figsize is None) or (image_rows > 1 and figsize == (14, 6))
+    if auto_figsize:
+        per_col_w = 3.0   # width (inches) per image column
+        per_row_h = 3.0   # height (inches) per image row
+        ts_h = 2.0        # time-series height
+        fig_w = max(6.0, cols * per_col_w)
+        fig_h = rows * per_row_h + ts_h
+        figsize = (fig_w, fig_h)
+
     fig = plt.figure(figsize=figsize)
-    gs = fig.add_gridspec(2, n_frames, height_ratios=[3, 1])
+
+    # Outer grid: top = images grid, bottom = time-series
+    outer = fig.add_gridspec(2, 1, height_ratios=[max(1, rows) * 5, 1])
+    grid = outer[0].subgridspec(rows, cols)
 
     for ci, t in enumerate(indices):
-        ax = fig.add_subplot(gs[0, ci])
+        r, c = divmod(ci, cols)
+        ax = fig.add_subplot(grid[r, c])
         frame = frames_vis[t]
         if C == 1:
-            base_img = frame[0]
-            ax.imshow(base_img, cmap="gray", interpolation="nearest")
+            ax.imshow(frame[0], cmap="gray", interpolation="nearest")
         else:
-            base_img = frame.transpose(1, 2, 0)
-            ax.imshow(base_img, interpolation="nearest")
-
-        heat = cam_show[t]
-        ax.imshow(heat, cmap=cmap, alpha=overlay_alpha, interpolation="nearest")
+            ax.imshow(frame.transpose(1, 2, 0), interpolation="nearest")
+        ax.imshow(cam_show[t], cmap=cmap, alpha=overlay_alpha, interpolation="nearest")
         ax.set_title(f"t={t}")
         ax.axis("off")
 
-    ax_ts = fig.add_subplot(gs[1, :])
-    ax_ts.plot(range(T), cam_weights, color="tab:red" if matplotlib_is_available() else "tabred", lw=2)
-    ax_ts.set_xlabel("Time step")
-    ax_ts.set_ylabel("CAM weight")
+    ax_ts = fig.add_subplot(outer[1])
+    ax_ts.plot(range(T), cam_weights, color="tab:red")
+    ax_ts.scatter(indices, cam_weights[indices], color="black", s=14, zorder=3)
     ax_ts.set_xlim(0, T - 1)
-
-    ax_ts.scatter(indices, cam_weights[indices], color="black", s=16, zorder=3)
-    ax_ts.grid(alpha=0.3)
+    ax_ts.set_xlabel("Time")
+    ax_ts.set_ylabel("CAM")
+    ax_ts.grid(alpha=0.25)
 
     fig.tight_layout()
-
     if save_path:
-        fig.savefig(save_path, dpi=200, bbox_inches="tight")
-
+        fig.savefig(save_path, dpi=180, bbox_inches="tight")
     if show:
         plt.show()
-
     return fig
-
-# helper used above to avoid failing if matplotlib not imported globally
-def matplotlib_is_available():
-    try:
-        import matplotlib
-        return True
-    except Exception:
-        return False

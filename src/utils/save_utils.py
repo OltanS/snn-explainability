@@ -37,7 +37,7 @@ def load_model(model, path_or_dir, dataset_name, optimizer=None, device=None):
       • the newest matching file in a directory.
 
     args:
-      path_or_dir: str, path to a model‐file or a directory to scan
+      path_or_dir: str, path to a model-file or a directory to scan
       model:       nn.Module to load weights into
       optimizer:   optional torch.optim to restore state
       device:      optional torch.device to map all tensors onto (e.g., cuda:local_rank)
@@ -50,15 +50,15 @@ def load_model(model, path_or_dir, dataset_name, optimizer=None, device=None):
     else:
         model_name = get_model_name(model)
         candidates = glob.glob(os.path.join(path_or_dir, "*"))
+        tail = f"{dataset_name}_{model_name}"
         model_files = [
             f for f in candidates
-            if dataset_name in os.path.basename(f)
-               and model_name in os.path.basename(f)
+            if os.path.basename(f).endswith(f"{tail}.pth")
+            or os.path.basename(f).endswith(f"{tail}.pt")
         ]
         if not model_files:
             raise FileNotFoundError(
-                f"No model files found in {path_or_dir!r} for "
-                f"dataset={dataset_name!r}, model={model_name!r}"
+                f"No model files found in {path_or_dir!r} for dataset={dataset_name!r}, model={model_name!r}"
             )
         model_file = max(model_files, key=os.path.getctime)
 
@@ -88,7 +88,7 @@ def load_model(model, path_or_dir, dataset_name, optimizer=None, device=None):
                     if torch.is_tensor(v):
                         state[k] = v.to(device)
 
-    return ckpt.get("epoch"), ckpt.get("loss")
+    return ckpt.get("epoch") + 1, ckpt.get("loss")
 
 def interactive_load_model(model, directory, dataset_name, optimizer=None):
     """

@@ -14,7 +14,7 @@ class CustomSpikingVGG(SpikingVGG):
         self.in_channels = in_channels
         super().__init__(cfg, batch_norm, norm_layer, num_classes, init_weights, 
                         spiking_neuron, **kwargs)
-    
+
     def make_layers(self, cfg, batch_norm=False, norm_layer=None, neuron=None, **kwargs):
         """Modified make_layers that uses custom in_channels."""
         if norm_layer is None:
@@ -27,12 +27,11 @@ class CustomSpikingVGG(SpikingVGG):
             else:
                 conv2d = layer.Conv2d(in_channels, v, kernel_size=3, padding=1)
                 if batch_norm:
-                    layers += [conv2d, norm_layer(v), neuron(**deepcopy(kwargs))]
+                    layers += [conv2d, norm_layer(num_features=v), neuron(**deepcopy(kwargs))]
                 else:
                     layers += [conv2d, neuron(**deepcopy(kwargs))]
                 in_channels = v
         return nn.Sequential(*layers)
-
 
 def _custom_spiking_vgg(arch, cfg, batch_norm, pretrained, progress, norm_layer=None, 
                         spiking_neuron=None, in_channels=3, **kwargs):

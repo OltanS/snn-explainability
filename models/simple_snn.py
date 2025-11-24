@@ -32,7 +32,7 @@ class SimpleSNN(nn.Module):
             layer.VotingLayer(voting_size=voting_size)
         )
 
-    def _voting_and_total(num_classes, s0=128, s1=512):
+    def _voting_and_total(num_classes, s0=20, s1=400):
         if num_classes <= s0:
             v = 10
         elif num_classes >= s1:
