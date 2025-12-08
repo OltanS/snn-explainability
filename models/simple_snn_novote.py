@@ -4,7 +4,7 @@ from spikingjelly.activation_based import layer
 import math
 
 class SimpleSNNNoVote(nn.Module):
-    def __init__(self, num_classes, in_channels, spiking_neuron=None, **kwargs):
+    def __init__(self, num_classes, in_channels, spiking_neuron=None, have_last_spiking_neuron=True, **kwargs):
         super().__init__()
         channels = 128
         conv = []
@@ -27,7 +27,7 @@ class SimpleSNNNoVote(nn.Module):
             layer.Linear(512, 128),
             spiking_neuron(**kwargs),
             layer.Linear(128, num_classes),
-            spiking_neuron(**kwargs),
+            spiking_neuron(**kwargs) if have_last_spiking_neuron else nn.Identity(),
         )
     
     def forward(self, x: torch.Tensor):

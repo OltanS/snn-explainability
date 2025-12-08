@@ -1,22 +1,74 @@
 import os
+import torch
+from torch.utils.data import Dataset
+from torchvision import datasets
+from torchvision.transforms import v2
+from PIL import Image
+from pycocotools.coco import COCO
 
 from spikingjelly.datasets.dvs128_gesture import DVS128Gesture
 from spikingjelly.datasets.n_mnist import NMNIST
 from spikingjelly.datasets.cifar10_dvs import CIFAR10DVS
 
-from PIL import Image
-from pycocotools.coco import COCO
+_BASE_DATASETS = [
+    "tiny_imagenet", 
+    "nmnist", 
+    "cifar10_dvs", 
+    "dvs_gesture", 
+    "coco", 
+    "coco_multilabel", 
+    "voc_detection", 
+    "voc_multilabel", 
+    "imagenet"
+]
 
-import torch
-from torch.utils.data import Dataset
-from torchvision import datasets
-from torchvision.transforms import v2
+AVAILABLE_DATASETS = _BASE_DATASETS + [f"{name}_composite" for name in _BASE_DATASETS]
 
-from src.utils.config_utils import setup_config_dictionary
-    
+class CompositeDataset(Dataset):
+    def __init__(self, base_dataset, num_classes, double_width=True, force_different_class=True):
+        self.base_dataset = base_dataset
+        self.num_classes = num_classes
+        self.double_width = double_width
+        self.force_different_class = force_different_class
+        
+        if hasattr(base_dataset, 'targets'):
+            self.targets = base_dataset.targets
+        elif hasattr(base_dataset, 'dataset') and hasattr(base_dataset.dataset, 'targets'):
+             self.targets = [base_dataset.dataset.targets[i] for i in base_dataset.indices]
+        else:
+            raise ValueError("Base dataset must have 'targets' attribute for efficient class checking.")
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, idx):
+        img_a, target_a = self.base_dataset[idx]
+        label_a = int(target_a) if isinstance(target_a, (int, torch.Tensor)) else target_a
+
+        while True:
+            rand_idx = torch.randint(0, len(self.base_dataset), (1,)).item()
+            if rand_idx == idx: continue
+            
+            if self.force_different_class:
+                if self.targets is not None:
+                    label_b = int(self.targets[rand_idx])
+                    if label_a == label_b: continue
+                else:
+                    _, target_b = self.base_dataset[rand_idx]
+                    label_b = int(target_b) if isinstance(target_b, (int, torch.Tensor)) else target_b
+                    if label_a == label_b: continue
+            break
+
+        img_b, target_b = self.base_dataset[rand_idx]
+        composite_img = torch.cat([img_a, img_b], dim=-1)
+
+        label = torch.zeros(self.num_classes, dtype=torch.float32)
+        label[label_a] = 1.0
+        label[int(target_b)] = 1.0
+            
+        return composite_img, label
+
 def get_dataset_transforms(dataset_name, is_training):
-    config = setup_config_dictionary()
-
     if dataset_name == "tiny_imagenet":
         return v2.Compose([
             v2.ToImage(),
@@ -26,14 +78,11 @@ def get_dataset_transforms(dataset_name, is_training):
             (v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1) if is_training else v2.Lambda(lambda x: x)),
             v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
-    
     elif dataset_name == "nmnist":
-        # this is 34 x 34.
         return v2.Compose([
             v2.Lambda(lambda x: torch.from_numpy(x)),
             v2.ToDtype(torch.float32, scale=False),
         ])
-
     elif dataset_name == "cifar10_dvs":
         return v2.Compose([
             v2.Lambda(lambda x: torch.from_numpy(x)),
@@ -41,16 +90,13 @@ def get_dataset_transforms(dataset_name, is_training):
             v2.RandomHorizontalFlip() if is_training else v2.Lambda(lambda x: x),
             v2.RandomVerticalFlip() if is_training else v2.Lambda(lambda x: x),
         ])
-    
     elif dataset_name == "dvs_gesture":
         return v2.Compose([
             v2.Lambda(lambda x: torch.from_numpy(x)),
             v2.ToDtype(torch.float32, scale=False),
         ])
-    
-    # standard augmentations for image datasets
     elif "coco" in dataset_name or "voc" in dataset_name:
-        return v2.Compose([
+         return v2.Compose([
             v2.Resize((256, 256)),
             v2.ToImage(),
             v2.RandomResizedCrop((224, 224), scale=(0.5, 1)) if is_training else v2.Resize((224, 224)),
@@ -59,7 +105,6 @@ def get_dataset_transforms(dataset_name, is_training):
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
-    
     elif "imagenet" in dataset_name:
         return v2.Compose([
             v2.Resize((256, 256)),
@@ -70,21 +115,25 @@ def get_dataset_transforms(dataset_name, is_training):
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
-
     else:
         raise ValueError(f"Dataset {dataset_name} is not implemented.")
 
-def get_datasets(dataset_name, n_time_bins):
-    config = setup_config_dictionary()
-    train_transforms = get_dataset_transforms(dataset_name, is_training=True)
-    test_transforms = get_dataset_transforms(dataset_name, is_training=False)
-    if dataset_name == "tiny_imagenet":
-        DATA_DIR = config["DATA_SAVE_DIR"] + "/tiny-imagenet-200"
+def get_datasets(dataset_name, data_dir, n_time_bins):    
+    is_composite = False
+    if dataset_name.endswith("_composite"):
+        is_composite = True
+        base_name = dataset_name.replace("_composite", "")
+    else:
+        base_name = dataset_name
+    
+    train_transforms = get_dataset_transforms(base_name, is_training=True)
+    test_transforms = get_dataset_transforms(base_name, is_training=False)
+
+    if base_name == "tiny_imagenet":
+        DATA_DIR = os.path.join(data_dir, "tiny-imagenet-200")
         TRAIN_DIR = os.path.join(DATA_DIR, "train")
         VAL_DIR = os.path.join(DATA_DIR, "val")
-        VAL_IMG_DIR = os.path.join(VAL_DIR, "images")
-        VAL_ANN = os.path.join(VAL_DIR, "val_annotations.txt")
-
+        
         train_ds = datasets.ImageFolder(TRAIN_DIR, transform=train_transforms)
         
         class TinyImageNetVal(Dataset):
@@ -96,7 +145,6 @@ def get_datasets(dataset_name, n_time_bins):
 
                 with open(ann_path, "r") as f:
                     lines = [l.strip().split("\t") for l in f if l.strip()]
-                # filename -> wnid
                 fname_to_cls = {fname: wnid for (fname, wnid, *_ ) in lines}
 
                 classes = sorted(set(fname_to_cls.values()))
@@ -121,44 +169,38 @@ def get_datasets(dataset_name, n_time_bins):
 
         test_ds = TinyImageNetVal(VAL_DIR, transform=test_transforms)
 
-    elif dataset_name == "nmnist":
-        train_ds = NMNIST(root=config["DATA_SAVE_DIR"] + "/NMNIST", data_type="frame", frames_number=n_time_bins, split_by='number', transform=train_transforms, train=True)
-        test_ds = NMNIST(root=config["DATA_SAVE_DIR"] + "/NMNIST", data_type="frame", frames_number=n_time_bins, split_by='number', transform=test_transforms, train=False)
+    elif base_name == "nmnist":
+        train_ds = NMNIST(root=os.path.join(data_dir, "NMNIST"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=train_transforms, train=True)
+        test_ds = NMNIST(root=os.path.join(data_dir, "NMNIST"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=test_transforms, train=False)
 
-    elif dataset_name == "cifar10_dvs":
-        # assumes same transforms for train and test, which currently is the case.
-        full_ds = CIFAR10DVS(root=config["DATA_SAVE_DIR"] + "/CIFAR10DVS", data_type="frame", frames_number=n_time_bins, split_by='number', transform=train_transforms)
+    elif base_name == "cifar10_dvs":
+        full_ds = CIFAR10DVS(root=os.path.join(data_dir, "CIFAR10DVS"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=train_transforms)
         n_train = int(0.8 * len(full_ds))
         n_val = len(full_ds) - n_train
-
-        # deterministic split of the dataset
         generator = torch.Generator().manual_seed(42)
         train_ds, test_ds = torch.utils.data.random_split(full_ds, [n_train, n_val], generator=generator)
 
-    elif dataset_name == "dvs_gesture":
-        train_ds = DVS128Gesture(root=config["DATA_SAVE_DIR"] + "/DVS128Gesture", data_type="frame", frames_number=n_time_bins, split_by='number', transform=train_transforms, train=True)
-        test_ds = DVS128Gesture(root=config["DATA_SAVE_DIR"] + "/DVS128Gesture", data_type="frame", frames_number=n_time_bins, split_by='number', transform=test_transforms, train=False)
+    elif base_name == "dvs_gesture":
+        train_ds = DVS128Gesture(root=os.path.join(data_dir, "DVS128Gesture"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=train_transforms, train=True)
+        test_ds = DVS128Gesture(root=os.path.join(data_dir, "DVS128Gesture"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=test_transforms, train=False)
 
-    elif dataset_name == "coco":
+    elif base_name == "coco":
         train_ds = datasets.CocoDetection(
-            root=f'{config["DATA_SAVE_DIR"]}/CocoDetection/train2014',
-            annFile=f'{config["DATA_SAVE_DIR"]}/CocoDetection/annotations/instances_train2014.json',
+            root=os.path.join(data_dir, 'CocoDetection/train2014'),
+            annFile=os.path.join(data_dir, 'CocoDetection/annotations/instances_train2014.json'),
             transform=train_transforms,
         )
-        
         test_ds = datasets.CocoDetection(
-            root=f'{config["DATA_SAVE_DIR"]}/CocoDetection/val2014',
-            annFile=f'{config["DATA_SAVE_DIR"]}/CocoDetection/annotations/instances_val2014.json',
+            root=os.path.join(data_dir, 'CocoDetection/val2014'),
+            annFile=os.path.join(data_dir, 'CocoDetection/annotations/instances_val2014.json'),
             transform=test_transforms,
         )
-
-    elif dataset_name == "coco_multilabel":
+    elif base_name == "coco_multilabel":
         class COCOMultiLabel(torch.utils.data.Dataset):
             def __init__(self, root_imgs, ann_file, transform=None):
                 self.root_imgs = root_imgs
                 self.transform = transform
                 self.coco = COCO(ann_file)
-                # COCO category ids are not contiguous; build mapping to [0..N-1]
                 cats = self.coco.loadCats(self.coco.getCatIds())
                 self.classes = [c['name'] for c in cats]
                 self.cat_id_to_idx = {c['id']: i for i, c in enumerate(cats)}
@@ -184,34 +226,31 @@ def get_datasets(dataset_name, n_time_bins):
                 return img, multi_hot
 
         train_ds = COCOMultiLabel(
-            root_imgs=f'{config["DATA_SAVE_DIR"]}/CocoDetection/train2014',
-            ann_file=f'{config["DATA_SAVE_DIR"]}/CocoDetection/annotations/instances_train2014.json',
+            root_imgs=os.path.join(data_dir, 'CocoDetection/train2014'),
+            ann_file=os.path.join(data_dir, 'CocoDetection/annotations/instances_train2014.json'),
             transform=train_transforms
         )
         test_ds = COCOMultiLabel(
-            root_imgs=f'{config["DATA_SAVE_DIR"]}/CocoDetection/val2014',
-            ann_file=f'{config["DATA_SAVE_DIR"]}/CocoDetection/annotations/instances_val2014.json',
+            root_imgs=os.path.join(data_dir, 'CocoDetection/val2014'),
+            ann_file=os.path.join(data_dir, 'CocoDetection/annotations/instances_val2014.json'),
             transform=test_transforms
         )
-
-    elif dataset_name == "voc_detection":
+    elif base_name == "voc_detection":
         train_ds = datasets.VOCDetection(
-            root=f'{config["DATA_SAVE_DIR"]}',
+            root=data_dir,
             year='2007',
             image_set='train',
             download=False,
             transform=train_transforms,
         )
-        
         test_ds = datasets.VOCDetection(
-            root=f'{config["DATA_SAVE_DIR"]}',
+            root=data_dir,
             year='2007',
             image_set='val',
             download=False,
             transform=test_transforms,
         )
-
-    elif dataset_name == "voc_multilabel":
+    elif base_name == "voc_multilabel":
         class VOCMultiLabel(datasets.VOCDetection):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
@@ -235,30 +274,28 @@ def get_datasets(dataset_name, n_time_bins):
                 return img, multi_hot
 
         train_ds = VOCMultiLabel(
-            root=f'{config["DATA_SAVE_DIR"]}',
+            root=data_dir,
             year='2007',
             image_set='train',
             download=False,
             transform=train_transforms,
         )
-        
         test_ds = VOCMultiLabel(
-            root=f'{config["DATA_SAVE_DIR"]}',
+            root=data_dir,
             year='2007',
             image_set='val',
             download=False,
             transform=test_transforms,
         )
     
-    elif dataset_name == "imagenet":
+    elif base_name == "imagenet":
         train_ds = datasets.ImageNet(
-            root=f'{config["DATA_SAVE_DIR"]}/ImageNet',
+            root=os.path.join(data_dir, 'ImageNet'),
             split='train',
             transform=train_transforms,
         )
-        
         test_ds = datasets.ImageNet(
-            root=f'{config["DATA_SAVE_DIR"]}/ImageNet',
+            root=os.path.join(data_dir, 'ImageNet'),
             split='val',
             transform=test_transforms,
         )
@@ -266,13 +303,16 @@ def get_datasets(dataset_name, n_time_bins):
     else:
         raise ValueError(f"Dataset {dataset_name} is not implemented.")
         
+    if is_composite:
+        num_classes = len(train_ds.classes)
+        train_ds = CompositeDataset(train_ds, num_classes=num_classes)
+        test_ds = CompositeDataset(test_ds, num_classes=num_classes)
+
     return train_ds, test_ds
 
-def get_dataloaders(dataset_name, batch_size, n_time_bins, on_ddp=False):
-    '''
-    Dataloaders always load data of shape batch_size x time_bins x num_polarities x height x width
-    '''
-    train_ds, test_ds = get_datasets(dataset_name, n_time_bins)
+def get_dataloaders(dataset_name, data_dir, batch_size, n_time_bins, on_ddp=False, num_workers=4):
+    # Added data_dir, num_workers arguments
+    train_ds, test_ds = get_datasets(dataset_name, data_dir, n_time_bins)
 
     if on_ddp:
         from torch.utils.data.distributed import DistributedSampler
@@ -282,16 +322,13 @@ def get_dataloaders(dataset_name, batch_size, n_time_bins, on_ddp=False):
         train_sampler = None
         test_sampler = None
     
-    # PadTensors actually doesn't do anything since we use a fixed N_TIME_BINS in the transforms.
     train_loader = torch.utils.data.DataLoader(
         train_ds, 
         batch_size=batch_size, 
         shuffle=(train_sampler is None), 
-        # collate_fn=tonic.collation.PadTensors(), 
-        num_workers=4,
-        prefetch_factor=5,
-        persistent_workers=True,
-        # pin_memory=True,
+        num_workers=num_workers,
+        prefetch_factor=5 if num_workers > 0 else None,
+        persistent_workers=(num_workers > 0),
         sampler=train_sampler,
         drop_last=True,
     )
@@ -300,12 +337,10 @@ def get_dataloaders(dataset_name, batch_size, n_time_bins, on_ddp=False):
         test_ds, 
         batch_size=batch_size, 
         shuffle=(test_sampler is None), 
-        # collate_fn=tonic.collation.PadTensors(), 
-        num_workers=4,
-        prefetch_factor=5,
-        persistent_workers=True,
-        # pin_memory=True,
+        num_workers=num_workers,
+        prefetch_factor=5 if num_workers > 0 else None,
+        persistent_workers=(num_workers > 0),
         sampler=test_sampler,
     )
     
-    return train_loader, test_loader 
+    return train_loader, test_loader

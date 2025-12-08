@@ -6,9 +6,8 @@ import spikingjelly.activation_based.functional as functional
 
 def apply_criterion(criterion, output, labels):
     # outputs = output.mean(dim=0)
-    # print(f"Output shape in apply_criterion: {output.shape}")
-    # print(f"Labels shape in apply_criterion: {labels.shape}")
     outputs = output.sum(dim=0)
+    # print("Summed outputs sample:", outputs[0])
     if isinstance(criterion, torch.nn.BCEWithLogitsLoss):
         # labels: (B, C) float {0,1}
         labels = labels.float()
@@ -22,16 +21,32 @@ def apply_criterion(criterion, output, labels):
     
     elif isinstance(criterion, torch.nn.CrossEntropyLoss):
         loss = criterion(outputs, labels)
+        preds = outputs.argmax(dim=-1)
+        acc = (preds == labels).float().mean()
+        return loss, acc
     
     elif isinstance(criterion, torch.nn.MSELoss):
-        num_classes = output.size(-1)
-        labels_one_hot = torch.nn.functional.one_hot(labels, num_classes=num_classes).float()
-        loss = criterion(outputs, labels_one_hot)
+        # only one-hot if not already one-hot encoded
+        if labels.dim() == 1:
+            # Single-label classification: convert to one-hot
+            num_classes = outputs.size(-1)
+            original_labels = labels  # Keep for accuracy
+            labels = torch.nn.functional.one_hot(labels, num_classes=num_classes).float()
+            preds = outputs.argmax(dim=-1)
+            acc = (preds == original_labels).float().mean()
+        else:
+            # Multi-label classification: labels are already multi-hot [B, C]
+            labels = labels.float()
+            preds = (outputs > 0.5).float()  # Threshold predictions
+            # Use IoU (Jaccard index) for multi-label accuracy
+            intersection = (preds * labels).sum(dim=1)
+            union = (preds + labels - preds * labels).sum(dim=1).clamp(min=1e-6)
+            acc = (intersection / union).mean()
+
+        loss = criterion(outputs, labels)
     else:
         raise ValueError(f"Unsupported criterion type: {type(criterion)}.")
 
-    preds = outputs.argmax(dim=-1)
-    acc = (preds == labels).float().mean()
 
     return loss, acc
 

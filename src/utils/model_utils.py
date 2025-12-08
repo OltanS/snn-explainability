@@ -10,7 +10,7 @@ from models.spiking_vgg import custom_spiking_vgg11, custom_spiking_vgg11_bn, cu
 from models.sew_resnet import ResNetWrapper
 from models.simple_snn import SimpleSNN
 from models.simple_snn_novote import SimpleSNNNoVote
-from models.simple_snn_accumulate import SimpleSNNAccumulate
+from models.simple_snn_novote_composite import SimpleSNNNoVoteComposite
 
 model_to_name = {
     custom_spiking_vgg11: "spiking_vgg11",
@@ -20,10 +20,13 @@ model_to_name = {
     sew_resnet34: "sew_resnet34_spiking",
     SimpleSNN: "simple_snn",
     SimpleSNNNoVote: "simple_snn_no_vote",
-    SimpleSNNAccumulate: "simple_snn_accumulate"
+    SimpleSNNNoVoteComposite: "simple_snn_no_vote_composite",
+    partial(SimpleSNNNoVote, have_last_spiking_neuron=False): "simple_snn_no_vote_no_last_spiking",
+    partial(SimpleSNNNoVoteComposite, have_last_spiking_neuron=False): "simple_snn_no_vote_composite_no_last_spiking",
 }
 
 name_to_model = {v: k for k, v in model_to_name.items()}
+AVAILABLE_MODELS = list(name_to_model.keys())
 
 def get_model(model_name, num_classes, in_channels, spiking_neuron, pretrained=False, **kwargs):
     ModelClass: Type[nn.Module] = get_model_class(model_name)

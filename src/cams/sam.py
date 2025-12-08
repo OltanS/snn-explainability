@@ -10,26 +10,23 @@ class SpikeActivationMap(BaseTemporalCAM):
     def __init__(self, model: nn.Module, target_layer: nn.Module, gamma: float = 0.5):
         super().__init__(model, target_layer)
         self.gamma = gamma
-        self._handles: List[torch.utils.hooks.RemovableHandle] = []
-        self._seq = None
-        self._register()
-
-    def _register(self):
-        def hook(module, inp, out):
-            # Expect multi-step aggregated output: (T,B,C,H,W)
-            self._seq = out.detach()
-        self._handles.append(self.target_layer.register_forward_hook(hook))
-
-    def remove_hooks(self):
-        for h in self._handles:
-            h.remove()
-        self._handles.clear()
-
+    
     def _compute_raw(self, x: torch.Tensor, class_idx: Optional[int]) -> torch.Tensor:
-        self._seq = None
-        _ = self.model(x)  # Forward to collect spikes.
-        assert self._seq is not None, "No spike sequence captured."
-        spk_seq = self._seq  # (T,B,C,Hf,Wf)
+        seq = None
+        def hook(module, inp, out):
+            nonlocal seq
+            # Expect multi-step aggregated output: (T,B,C,H,W)
+            seq = out.detach()
+            
+        handle = self.target_layer.register_forward_hook(hook)
+        
+        try:
+            _ = self.model(x)  # Forward to collect spikes.
+        finally:
+            handle.remove()
+            
+        assert seq is not None, "No spike sequence captured."
+        spk_seq = seq  # (T,B,C,Hf,Wf)
         T, B, C, Hf, Wf = spk_seq.shape
         E = torch.exp(torch.tensor(-self.gamma, device=spk_seq.device, dtype=spk_seq.dtype))
         cams = torch.zeros(B, T, Hf, Wf, device=spk_seq.device)

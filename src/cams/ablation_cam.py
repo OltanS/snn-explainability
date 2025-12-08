@@ -29,12 +29,15 @@ class AblationCAM(BaseTemporalCAM):
             def hook(module, inp, out):
                 nonlocal acts
                 acts = out.detach().clone()
-                return None
+
             h = self.target_layer.register_forward_hook(hook)
 
-        out = self.model(x)  # (T,B,K)
+        try:
+            out = self.model(x)  # (T,B,K)
+        finally:
+            h.remove()
+            
         functional.reset_net(self.model)
-        h.remove()
         return acts, out
 
     def compute_importance(self, x: torch.Tensor, class_idx: int = None):
@@ -89,12 +92,15 @@ class AblationCAM(BaseTemporalCAM):
                         else:
                             raise RuntimeError(f"Unexpected output dim: {out.shape}")
                         out.mul_(m)
-                        return None
+                        
                     handle = self.target_layer.register_forward_hook(ablate_hook)
 
-                out_rep = self.model(input_rep)  # (T,G,K)
+                try:
+                    out_rep = self.model(input_rep)  # (T,G,K)
+                finally:
+                    handle.remove()
+                    
                 functional.reset_net(self.model)
-                handle.remove()
 
                 score_batch = out_rep.sum(dim=0)[:, class_idx] # (G,)
                 drops[start:end] = baseline - score_batch

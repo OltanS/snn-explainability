@@ -2,3 +2,8 @@
 __pycache__
 data
 models_save
+torch_cache
+spikingjelly
+img
+metrics
+

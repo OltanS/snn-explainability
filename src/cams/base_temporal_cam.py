@@ -14,7 +14,6 @@ class BaseTemporalCAM(ABC):
     def __init__(self, model: nn.Module, target_layer: nn.Module):
         self.model = model
         self.target_layer = target_layer
-        self.model.eval()
 
     @abstractmethod
     def _compute_raw(self, x: torch.Tensor, class_idx: Optional[int]) -> torch.Tensor:
@@ -40,7 +39,9 @@ class BaseTemporalCAM(ABC):
             cams = normalize_per_timestep(cams)
         if upsample:
             cams = upsample_cams(cams, (x.shape[-2], x.shape[-1]))
+        
         functional.reset_net(self.model)
+        
         if squeeze_batch and cams.shape[0] == 1:
             cams = cams[0]
         if return_numpy:
