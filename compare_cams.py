@@ -13,15 +13,19 @@ import matplotlib.pyplot as plt
 from spikingjelly.activation_based import neuron, surrogate, functional, layer
 
 # Local imports
-from src.cams.gradcam import SNNGradCAM
-from src.cams.ablation_cam import AblationCAM
-from src.cams.mc_ablation_cam import MCAblationCAM
-from src.cams.sam import SpikeActivationMap
 from src.utils.args_utils import parse_args
 from src.utils.data_utils import get_dataloaders
-from src.utils.model_utils import get_model
+from src.utils.model_utils import get_model, get_conv_layers, get_lif_layers
 from src.utils.save_utils import load_model
+from src.cams.generation_utils import (
+    generate_grad_cam, 
+    generate_ablation_cam, 
+    generate_mc_ablation_cam, 
+    generate_sam, 
+    generate_noise_grad_cam,
+)
 from src.utils.distributed_utils import ddp_setup, ddp_cleanup
+from src.noisy_node import noise_injection
 
 # ============================================================================
 # Distributed Utilities
@@ -38,12 +42,6 @@ def is_main_process():
 # ============================================================================
 # Model Utilities
 # ============================================================================
-def get_conv_layers(model):
-    return [m for m in model.modules() if isinstance(m, layer.Conv2d)]
-
-def get_lif_layers(model):
-    return [m for m in model.modules() if isinstance(m, (neuron.LIFNode, neuron.IFNode))]
-
 def get_valid_layer_pairs(model, requested_indices):
     """
     Filter layer pairs to only include valid indices for the model.
@@ -61,56 +59,9 @@ def get_valid_layer_pairs(model, requested_indices):
         print(f"Layer pairs: Requested indices {requested_indices}, Valid pairs {valid} "
               f"(Model: {n_conv} Conv, {n_lif} LIF)")
     return valid
-
-@contextmanager
-def grad_cam_context(model):
-    """Context manager for GradCAM: enables gradients, sets train mode, freezes BN/Dropout."""
-    prev_training = model.training
-    
-    # Enable gradients and set train mode for surrogate gradients
-    for p in model.parameters():
-        p.requires_grad = True
-    model.train()
-    
-    # Keep BN/Dropout in eval mode
-    for m in model.modules():
-        if isinstance(m, (layer.BatchNorm1d, layer.BatchNorm2d, layer.BatchNorm3d, 
-                          layer.Dropout, layer.Dropout2d)):
-            m.eval()
-    try:
-        yield
-    finally:
-        model.zero_grad()
-        for p in model.parameters():
-            p.requires_grad = False
-        model.train(prev_training)
-        functional.reset_net(model)
-
 # ============================================================================
 # CAM Generators
 # ============================================================================
-def generate_grad_cam(model, events, class_idx, conv_idx):
-    with grad_cam_context(model):
-        target = get_conv_layers(model)[conv_idx]
-        return SNNGradCAM(model, target).generate(events, class_idx=class_idx).detach()
-
-def generate_ablation_cam(model, events, class_idx, conv_idx, channel_batch_size):
-    functional.reset_net(model)
-    target = get_conv_layers(model)[conv_idx]
-    return AblationCAM(model, target, channel_batch_size=channel_batch_size).generate(
-        events, class_idx=class_idx).detach()
-
-def generate_mc_ablation_cam(model, events, class_idx, lif_idx, channel_batch_size, k_trials):
-    functional.reset_net(model)
-    target = get_lif_layers(model)[lif_idx]
-    return MCAblationCAM(model, target, channel_batch_size=channel_batch_size, 
-                         k_trials=k_trials).generate(events, class_idx=class_idx).detach()
-
-def generate_sam(model, events, lif_idx):
-    functional.reset_net(model)
-    target = get_lif_layers(model)[lif_idx]
-    return SpikeActivationMap(model, target).generate(events).detach()
-
 def generate_random_cam(events):
     T, _, _, H, W = events.shape
     return torch.rand((T, H, W), device=events.device)
@@ -119,13 +70,19 @@ def generate_all_cams(model, events, class_idx, conv_idx, lif_idx, args):
     """Generate all CAM types for a given input and class."""
     cams = {}
     if 'grad' in args.cam_methods:
-        cams['grad'] = generate_grad_cam(model, events, class_idx, conv_idx)
+        cams['grad'] = generate_grad_cam(events, class_idx, conv_idx, model)
     if 'ablation' in args.cam_methods:
-        cams['ablation'] = generate_ablation_cam(model, events, class_idx, conv_idx, args.channel_batch_size)
+        cams['ablation'] = generate_ablation_cam(events, class_idx, conv_idx, model, batch_size=args.channel_batch_size)
     if 'mc_ablation' in args.cam_methods:
-        cams['mc_ablation'] = generate_mc_ablation_cam(model, events, class_idx, lif_idx, args.channel_batch_size, args.k_trials)
+        cams['mc_ablation'], _ = generate_mc_ablation_cam(events, class_idx, lif_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size)
     if 'sam' in args.cam_methods:
-        cams['sam'] = generate_sam(model, events, lif_idx)
+        cams['sam'] = generate_sam(events, lif_idx, model)
+    if 'noise_grad_surrogate' in args.cam_methods:
+        cams['noise_grad_surrogate'] = generate_noise_grad_cam(events, class_idx, conv_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="surrogate")
+    if 'noise_grad_uniform' in args.cam_methods:
+        cams['noise_grad_uniform'] = generate_noise_grad_cam(events, class_idx, conv_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="uniform")
+    if 'noise_grad_gaussian' in args.cam_methods:
+        cams['noise_grad_gaussian'] = generate_noise_grad_cam(events, class_idx, conv_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="gaussian")
     if 'random' in args.cam_methods:
         cams['random'] = generate_random_cam(events)
     return cams
@@ -149,31 +106,23 @@ def get_scores(model, inputs, class_idx, is_multilabel=False):
 
 def get_mc_scores(model, inputs, class_idx, k_trials, is_multilabel=False):
     """Compute Monte Carlo smoothed scores by injecting noise into LIF layers."""
-    lif_layers = get_lif_layers(model)
-    
-    def noise_hook(module, inp):
-        v_thr = getattr(module, 'v_threshold', 1.0)
-        return (inp[0] + torch.rand_like(inp[0]) * v_thr,)
-
-    handles = [l.register_forward_pre_hook(noise_hook) for l in lif_layers]
-    
     act_sum, conf_sum = 0.0, 0.0
-    with torch.no_grad():
-        for _ in range(k_trials):
-            functional.reset_net(model)
-            out = model(inputs)
-            logits = out.sum(dim=0)[0]
-            
-            if is_multilabel:
-                conf = torch.sigmoid(logits)
-            else:
-                conf = F.softmax(logits, dim=0)
-            
-            act_sum += logits[class_idx].item()
-            conf_sum += conf[class_idx].item()
     
-    for h in handles:
-        h.remove()
+    with noise_injection(model, noise_type="surrogate"):
+        with torch.no_grad():
+            for _ in range(k_trials):
+                functional.reset_net(model)
+                out = model(inputs)
+                logits = out.sum(dim=0)[0]
+                
+                if is_multilabel:
+                    conf = torch.sigmoid(logits)
+                else:
+                    conf = F.softmax(logits, dim=0)
+                
+                act_sum += logits[class_idx].item()
+                conf_sum += conf[class_idx].item()
+    
     functional.reset_net(model)
     
     return act_sum / k_trials, conf_sum / k_trials
@@ -386,13 +335,17 @@ def main():
     args = parse_args()
 
     # --- Distributed Setup ---
-    if args.world_size > 1:
-        is_distributed = True
-        ddp_setup(args.local_rank)
-        device = torch.device(f"cuda:{args.local_rank}")
-        print(f"DDP initialized: Rank {get_rank()} (Local {args.local_rank})")
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    rank = int(os.environ.get("RANK", 0))
+
+    is_distributed = world_size > 1
+
+    if is_distributed:
+        ddp_setup(local_rank)
+        device = torch.device(f"cuda:{local_rank}")
+        print(f"DDP initialized: Rank {rank} (Local {local_rank})")
     else:
-        is_distributed = False
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Non-distributed mode on {device}")
 
@@ -485,15 +438,15 @@ def main():
         target_classes = get_target_classes(labels, is_multilabel)
         
         if not target_classes:
-            if pbar: pbar.update(1)
+            # if pbar: pbar.update(1)
             continue
 
-        if len(target_classes) != 2:
-            if pbar: pbar.update(1)
-            continue
+        # if len(target_classes) != 2:
+        #     if pbar: pbar.update(1)
+        #     continue
         
         if not check_prediction_correct(model, events, target_classes, is_multilabel):
-            if pbar: pbar.update(1)
+            # if pbar: pbar.update(1)
             continue
         
         should_visualize = is_main_process() and vis_count < args.num_visualizations
@@ -542,11 +495,11 @@ def main():
         df_var = pd.DataFrame(final_variances)
         
         dataset_name = args.dataset_name
-        df.to_csv(f"cam_faithfulness_metrics_{dataset_name}.csv", index=False)
-        df_var.to_csv(f"cam_spatial_variances_{dataset_name}.csv", index=False)
+        df.to_csv(f"metrics/cam_faithfulness_metrics_{dataset_name}.csv", index=False)
+        df_var.to_csv(f"metrics/cam_spatial_variances_{dataset_name}.csv", index=False)
         
-        print(f"\nSaved results to cam_faithfulness_metrics_{dataset_name}.csv")
-        print(f"Saved variances to cam_spatial_variances_{dataset_name}.csv")
+        print(f"\nSaved results to metrics/cam_faithfulness_metrics_{dataset_name}.csv")
+        print(f"Saved variances to metrics/cam_spatial_variances_{dataset_name}.csv")
         print(f"Saved {vis_count} visualizations to {vis_dir}/")
         
         print(f"\n{'='*60}")
@@ -560,9 +513,17 @@ def main():
             ('Confidence Increase Rate', 'Confidence Increase Rate', df, True),
             ('MC Confidence Drop', 'MC Confidence Drop', df, False),
             ('MC Activation Drop', 'MC Activation Drop', df, False),
+            ('MC Confidence Increase Rate', 'MC Confidence Increase Rate', df, True),
+            # ('MC Masked Confidence', 'MC Masked Confidence', df, True),
+            # ('MC Masked Activation', 'MC Masked Activation', df, True),
+            # ('MC Base Confidence', 'MC Base Confidence', df, True),
+            # ('MC Base Activation', 'MC Base Activation', df, True),
         ]
         
         for col, name, data, higher_better in metrics_to_print:
             direction = "(Higher is better)" if higher_better else "(Lower is better)"
             print(f"\n{name} {direction}:")
             print(data.groupby(['Layer', 'Method'])[col].mean().unstack())
+
+if __name__ == "__main__":
+    main()

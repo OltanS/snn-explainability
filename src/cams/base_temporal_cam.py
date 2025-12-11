@@ -15,6 +15,7 @@ class BaseTemporalCAM(ABC):
         self.model = model
         self.target_layer = target_layer
 
+
     @abstractmethod
     def _compute_raw(self, x: torch.Tensor, class_idx: Optional[int]) -> torch.Tensor:
         """

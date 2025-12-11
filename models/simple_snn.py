@@ -4,7 +4,7 @@ from spikingjelly.activation_based import layer
 import math
 
 class SimpleSNN(nn.Module):
-    def __init__(self, num_classes, in_channels, spiking_neuron=None, **kwargs):
+    def __init__(self, num_classes, in_channels, spiking_neuron=None, have_last_spiking_neuron=True, **kwargs):
         super().__init__()
         channels = 128
         conv = []
@@ -15,8 +15,6 @@ class SimpleSNN(nn.Module):
             conv.append(layer.MaxPool2d(2, 2))
             in_channels = channels
 
-        voting_size, total_outputs = SimpleSNN._voting_and_total(num_classes)
-
         self.conv_fc = nn.Sequential(
             *conv,
 
@@ -26,20 +24,26 @@ class SimpleSNN(nn.Module):
             spiking_neuron(**kwargs),
 
             layer.Dropout(0.5),
-            layer.Linear(512, total_outputs),
+            layer.Linear(512, 128),
             spiking_neuron(**kwargs),
-
-            layer.VotingLayer(voting_size=voting_size)
+            layer.Linear(128, num_classes),
+            spiking_neuron(**kwargs) if have_last_spiking_neuron else nn.Identity(),
         )
 
-    def _voting_and_total(num_classes, s0=20, s1=400):
-        if num_classes <= s0:
-            v = 10
-        elif num_classes >= s1:
-            v = 1
-        else:
-            v = math.ceil(1 + 9 * (s1 - num_classes) / (s1 - s0))
-        return v, num_classes * v
+        self._initialize_weights()
 
     def forward(self, x: torch.Tensor):
         return self.conv_fc(x)
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, layer.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, layer.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, layer.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.constant_(m.bias, 0)

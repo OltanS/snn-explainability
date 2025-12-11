@@ -5,12 +5,13 @@ import torch.nn as nn
 
 from spikingjelly.activation_based.layer import ThresholdDependentBatchNorm2d
 from spikingjelly.activation_based.model.sew_resnet import sew_resnet34
+from spikingjelly.activation_based import layer, neuron
 
 from models.spiking_vgg import custom_spiking_vgg11, custom_spiking_vgg11_bn, custom_spiking_vgg16_bn
 from models.sew_resnet import ResNetWrapper
+from models.simple_snn_voting import SimpleSNNVoting
 from models.simple_snn import SimpleSNN
-from models.simple_snn_novote import SimpleSNNNoVote
-from models.simple_snn_novote_composite import SimpleSNNNoVoteComposite
+from models.simple_snn_composite import SimpleSNNComposite
 
 model_to_name = {
     custom_spiking_vgg11: "spiking_vgg11",
@@ -18,11 +19,11 @@ model_to_name = {
     custom_spiking_vgg16_bn: "spiking_vgg16_bn",
     sew_resnet34: "sew_resnet34",
     sew_resnet34: "sew_resnet34_spiking",
+    SimpleSNNVoting: "simple_snn_voting",
     SimpleSNN: "simple_snn",
-    SimpleSNNNoVote: "simple_snn_no_vote",
-    SimpleSNNNoVoteComposite: "simple_snn_no_vote_composite",
-    partial(SimpleSNNNoVote, have_last_spiking_neuron=False): "simple_snn_no_vote_no_last_spiking",
-    partial(SimpleSNNNoVoteComposite, have_last_spiking_neuron=False): "simple_snn_no_vote_composite_no_last_spiking",
+    SimpleSNNComposite: "simple_snn_composite",
+    partial(SimpleSNN, have_last_spiking_neuron=False): "simple_snn_no_last_spiking",
+    partial(SimpleSNNComposite, have_last_spiking_neuron=False): "simple_snn_composite_no_last_spiking",
 }
 
 name_to_model = {v: k for k, v in model_to_name.items()}
@@ -92,3 +93,9 @@ def get_model_class(model_name):
     if model_class is None:
         raise ValueError(f"Model {model_name} is not implemented.")
     return model_class
+
+def get_conv_layers(model):
+    return [m for m in model.modules() if isinstance(m, layer.Conv2d)]
+
+def get_lif_layers(model):
+    return [m for m in model.modules() if isinstance(m, (neuron.LIFNode, neuron.IFNode))]

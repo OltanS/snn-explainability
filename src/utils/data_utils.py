@@ -9,12 +9,14 @@ from pycocotools.coco import COCO
 from spikingjelly.datasets.dvs128_gesture import DVS128Gesture
 from spikingjelly.datasets.n_mnist import NMNIST
 from spikingjelly.datasets.cifar10_dvs import CIFAR10DVS
+from spikingjelly.datasets.dvs_lip import DVSLip
 
 _BASE_DATASETS = [
     "tiny_imagenet", 
     "nmnist", 
     "cifar10_dvs", 
-    "dvs_gesture", 
+    "dvs_gesture",
+    "dvs_lip", 
     "coco", 
     "coco_multilabel", 
     "voc_detection", 
@@ -90,7 +92,7 @@ def get_dataset_transforms(dataset_name, is_training):
             v2.RandomHorizontalFlip() if is_training else v2.Lambda(lambda x: x),
             v2.RandomVerticalFlip() if is_training else v2.Lambda(lambda x: x),
         ])
-    elif dataset_name == "dvs_gesture":
+    elif dataset_name == "dvs_gesture" or dataset_name == "dvs_lip":
         return v2.Compose([
             v2.Lambda(lambda x: torch.from_numpy(x)),
             v2.ToDtype(torch.float32, scale=False),
@@ -183,6 +185,10 @@ def get_datasets(dataset_name, data_dir, n_time_bins):
     elif base_name == "dvs_gesture":
         train_ds = DVS128Gesture(root=os.path.join(data_dir, "DVS128Gesture"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=train_transforms, train=True)
         test_ds = DVS128Gesture(root=os.path.join(data_dir, "DVS128Gesture"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=test_transforms, train=False)
+
+    elif base_name == "dvs_lip":
+        train_ds = DVSLip(root=os.path.join(data_dir, "DVSLip"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=train_transforms, train=True)
+        test_ds = DVSLip(root=os.path.join(data_dir, "DVSLip"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=test_transforms, train=False)
 
     elif base_name == "coco":
         train_ds = datasets.CocoDetection(

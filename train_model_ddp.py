@@ -1,5 +1,8 @@
+import os
 import random
+from functools import partial
 import numpy as np
+
 
 import torch
 import torch.nn as nn
@@ -23,18 +26,23 @@ def main():
     args = parse_args()
     
     # DDP Setup
-    is_distributed = args.world_size > 1
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    rank = int(os.environ.get("RANK", 0))
+
+    is_distributed = world_size > 1
     if is_distributed:
-        ddp_setup(args.local_rank)
-        device = torch.device(f"cuda:{args.local_rank}")
+        ddp_setup(local_rank)
+        device = torch.device(f"cuda:{local_rank}")
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     set_seed(args.seed)
 
-    if args.rank == 0:
+    if rank == 0:
         print(f"Training on DATASET={args.dataset_name} MODEL={args.model_name}")
         print(f"Params: LR={args.lr}, WD={args.weight_decay}, TAU={args.tau}, BS={args.batch_size}")
+
 
     train_loader, test_loader = get_dataloaders(
         args.dataset_name, 
@@ -61,18 +69,21 @@ def main():
             raise ValueError("Could not determine number of classes from dataset.")
 
     neuron_choice = neuron.LIFNode if args.neuron_type == "lif" else neuron.IFNode
-    model_arguments = {
-        "num_classes": num_classes,
-        "in_channels": num_channels,
-        "spiking_neuron": neuron_choice,
-        "pretrained": False,
+    neuron_arguments = {
         "tau": args.tau,
         "detach_reset": True,
         "surrogate_function": surrogate.ATan()
     }
 
     if neuron_choice == neuron.IFNode:
-        model_arguments.pop("tau")
+        neuron_arguments.pop("tau")
+
+    model_arguments = {
+        "num_classes": num_classes,
+        "in_channels": num_channels,
+        "spiking_neuron": partial(neuron_choice, **neuron_arguments),
+        "pretrained": False,
+    }
 
     model = get_model(args.model_name, **model_arguments)
     functional.set_step_mode(model, 'm')
@@ -109,27 +120,29 @@ def main():
     )
 
     if is_distributed:
-        model = ddp_model(model, args.local_rank)
+        model = ddp_model(model, local_rank)
     else:
         model.to(device)
     
+
     # Explicit accumulation steps logic
     target_batch_size = 32
     accumulation_steps = max(1, target_batch_size // args.batch_size)
     
-    if args.rank == 0:
+    if rank == 0:
         print(f"Total Epochs: {args.epochs}, Accumulation Steps: {accumulation_steps}")
+        print(f"Model name : {args.model_name}\n Model architecture:\n{model}")
 
     for epoch in range(start_epoch, args.epochs):
         if is_distributed and hasattr(train_loader, "sampler") and train_loader.sampler is not None:
             train_loader.sampler.set_epoch(epoch)
         
-        run_epoch(model, train_loader, args.local_rank, epoch, optimizer, criterion, mode="TRAIN", n_time_bins=args.n_time_bins, accumulation_steps=accumulation_steps)
-        avg_test_loss, _ = run_epoch(model, test_loader, args.local_rank, epoch, optimizer, criterion, mode="TEST", n_time_bins=args.n_time_bins)
+        run_epoch(model, train_loader, local_rank, epoch, optimizer, criterion, mode="TRAIN", n_time_bins=args.n_time_bins, accumulation_steps=accumulation_steps)
+        avg_test_loss, _ = run_epoch(model, test_loader, local_rank, epoch, optimizer, criterion, mode="TEST", n_time_bins=args.n_time_bins)
         scheduler.step()
         
         if (epoch + 1) % args.save_every == 0:
-            if args.rank == 0:
+            if rank == 0:
                 save_model(model, args.model_save_dir, optimizer, epoch, avg_test_loss, dataset_name=args.dataset_name)
                 print(f"Model checkpoint saved at epoch {epoch+1}")
 

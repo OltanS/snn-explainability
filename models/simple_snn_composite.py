@@ -3,7 +3,7 @@ import torch.nn as nn
 from spikingjelly.activation_based import layer
 import math
 
-class SimpleSNNNoVoteComposite(nn.Module):
+class SimpleSNNComposite(nn.Module):
     def __init__(self, num_classes, in_channels, spiking_neuron=None, have_last_spiking_neuron=True, **kwargs):
         super().__init__()
         channels = 128

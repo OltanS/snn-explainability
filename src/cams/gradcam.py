@@ -10,7 +10,6 @@ class SNNGradCAM(BaseTemporalCAM):
     def __init__(self, model: nn.Module, target_layer: nn.Module):
         super().__init__(model, target_layer)
 
-
     def _compute_raw(self, x: torch.Tensor, class_idx: Optional[int]) -> torch.Tensor:
         acts = None
         grads = None

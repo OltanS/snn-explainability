@@ -3,8 +3,8 @@ import torch.nn as nn
 from spikingjelly.activation_based import layer
 import math
 
-class SimpleSNNNoVote(nn.Module):
-    def __init__(self, num_classes, in_channels, spiking_neuron=None, have_last_spiking_neuron=True, **kwargs):
+class SimpleSNNVoting(nn.Module):
+    def __init__(self, num_classes, in_channels, spiking_neuron=None, **kwargs):
         super().__init__()
         channels = 128
         conv = []
@@ -15,6 +15,8 @@ class SimpleSNNNoVote(nn.Module):
             conv.append(layer.MaxPool2d(2, 2))
             in_channels = channels
 
+        voting_size, total_outputs = SimpleSNNVoting._voting_and_total(num_classes)
+
         self.conv_fc = nn.Sequential(
             *conv,
 
@@ -24,12 +26,20 @@ class SimpleSNNNoVote(nn.Module):
             spiking_neuron(**kwargs),
 
             layer.Dropout(0.5),
-            layer.Linear(512, 128),
+            layer.Linear(512, total_outputs),
             spiking_neuron(**kwargs),
-            layer.Linear(128, num_classes),
-            spiking_neuron(**kwargs) if have_last_spiking_neuron else nn.Identity(),
+
+            layer.VotingLayer(voting_size=voting_size)
         )
-    
+
+    def _voting_and_total(num_classes, s0=20, s1=400):
+        if num_classes <= s0:
+            v = 10
+        elif num_classes >= s1:
+            v = 1
+        else:
+            v = math.ceil(1 + 9 * (s1 - num_classes) / (s1 - s0))
+        return v, num_classes * v
+
     def forward(self, x: torch.Tensor):
         return self.conv_fc(x)
-
