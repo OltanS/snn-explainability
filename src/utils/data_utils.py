@@ -14,6 +14,7 @@ from spikingjelly.datasets.dvs_lip import DVSLip
 _BASE_DATASETS = [
     "tiny_imagenet", 
     "nmnist", 
+    "cifar10",
     "cifar10_dvs", 
     "dvs_gesture",
     "dvs_lip", 
@@ -84,6 +85,14 @@ def get_dataset_transforms(dataset_name, is_training):
         return v2.Compose([
             v2.Lambda(lambda x: torch.from_numpy(x)),
             v2.ToDtype(torch.float32, scale=False),
+        ])
+    elif dataset_name == "cifar10":
+        return v2.Compose([
+            v2.ToImage(),
+            v2.ToDtype(torch.float32, scale=True),
+            v2.RandomCrop(32, padding=4) if is_training else v2.Lambda(lambda x: x),
+            v2.RandomHorizontalFlip() if is_training else v2.Lambda(lambda x: x),
+            v2.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616]),
         ])
     elif dataset_name == "cifar10_dvs":
         return v2.Compose([
@@ -174,6 +183,10 @@ def get_datasets(dataset_name, data_dir, n_time_bins):
     elif base_name == "nmnist":
         train_ds = NMNIST(root=os.path.join(data_dir, "NMNIST"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=train_transforms, train=True)
         test_ds = NMNIST(root=os.path.join(data_dir, "NMNIST"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=test_transforms, train=False)
+
+    elif base_name == "cifar10":
+        train_ds = datasets.CIFAR10(root=os.path.join(data_dir, "CIFAR10"), train=True, download=True, transform=train_transforms)
+        test_ds = datasets.CIFAR10(root=os.path.join(data_dir, "CIFAR10"), train=False, download=True, transform=test_transforms)
 
     elif base_name == "cifar10_dvs":
         full_ds = CIFAR10DVS(root=os.path.join(data_dir, "CIFAR10DVS"), data_type="frame", frames_number=n_time_bins, split_by='number', transform=train_transforms)

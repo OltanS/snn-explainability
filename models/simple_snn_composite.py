@@ -3,8 +3,19 @@ import torch.nn as nn
 from spikingjelly.activation_based import layer
 import math
 
+
+def _voting_size(num_classes, s0=20, s1=400):
+    """Compute voting size for VotingLayer based on number of classes."""
+    if num_classes <= s0:
+        return 10
+    elif num_classes >= s1:
+        return 1
+    else:
+        return math.ceil(1 + 9 * (s1 - num_classes) / (s1 - s0))
+
+
 class SimpleSNNComposite(nn.Module):
-    def __init__(self, num_classes, in_channels, spiking_neuron=None, have_last_spiking_neuron=True, **kwargs):
+    def __init__(self, num_classes, in_channels, spiking_neuron=None, readout="direct", **kwargs):
         super().__init__()
         channels = 128
         conv = []
@@ -14,6 +25,25 @@ class SimpleSNNComposite(nn.Module):
             conv.append(spiking_neuron(**kwargs))
             conv.append(layer.MaxPool2d(2, 2))
             in_channels = channels
+
+        # Build readout layers
+        if readout == "voting":
+            v = _voting_size(num_classes)
+            final_layers = [
+                layer.Linear(128, num_classes * v),
+                spiking_neuron(**kwargs),
+                layer.VotingLayer(voting_size=v),
+            ]
+        elif readout == "spiking":
+            final_layers = [
+                layer.Linear(128, num_classes),
+                spiking_neuron(**kwargs),
+            ]
+        else:  # direct
+            final_layers = [
+                layer.Linear(128, num_classes),
+                nn.Identity(),
+            ]
 
         self.conv_fc = nn.Sequential(
             *conv,
@@ -26,8 +56,7 @@ class SimpleSNNComposite(nn.Module):
             layer.Dropout(0.5),
             layer.Linear(512, 128),
             spiking_neuron(**kwargs),
-            layer.Linear(128, num_classes),
-            spiking_neuron(**kwargs) if have_last_spiking_neuron else nn.Identity(),
+            *final_layers,
         )
     
         self._initialize_weights()

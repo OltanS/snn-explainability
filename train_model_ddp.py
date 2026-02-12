@@ -83,6 +83,7 @@ def main():
         "in_channels": num_channels,
         "spiking_neuron": partial(neuron_choice, **neuron_arguments),
         "pretrained": False,
+        "readout": args.readout,
     }
 
     model = get_model(args.model_name, **model_arguments)

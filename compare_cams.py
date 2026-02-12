@@ -20,9 +20,11 @@ from src.utils.save_utils import load_model
 from src.cams.generation_utils import (
     generate_grad_cam, 
     generate_ablation_cam, 
-    generate_mc_ablation_cam, 
+    generate_mc_ablation_cam,
+    generate_mc_ablation_cam_transient,
     generate_sam, 
     generate_noise_grad_cam,
+    generate_smooth_grad_cam,
 )
 from src.utils.distributed_utils import ddp_setup, ddp_cleanup
 from src.noisy_node import noise_injection
@@ -77,6 +79,8 @@ def generate_all_cams(model, events, class_idx, conv_idx, lif_idx, args):
         cams['mc_ablation'], _ = generate_mc_ablation_cam(events, class_idx, lif_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size)
     if 'sam' in args.cam_methods:
         cams['sam'] = generate_sam(events, lif_idx, model)
+    if 'smooth_grad' in args.cam_methods:
+        cams['smooth_grad'] = generate_smooth_grad_cam(events, class_idx, conv_idx, model, n_samples=args.k_trials)
     if 'noise_grad_surrogate' in args.cam_methods:
         cams['noise_grad_surrogate'] = generate_noise_grad_cam(events, class_idx, conv_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="surrogate")
     if 'noise_grad_uniform' in args.cam_methods:
@@ -85,6 +89,10 @@ def generate_all_cams(model, events, class_idx, conv_idx, lif_idx, args):
         cams['noise_grad_gaussian'] = generate_noise_grad_cam(events, class_idx, conv_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="gaussian")
     if 'random' in args.cam_methods:
         cams['random'] = generate_random_cam(events)
+    if 'mc_ablation_transient_surrogate' in args.cam_methods:
+        cams['mc_ablation_transient_surrogate'], _ = generate_mc_ablation_cam_transient(events, class_idx, lif_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="surrogate")
+    if 'mc_ablation_transient_uniform' in args.cam_methods:
+        cams['mc_ablation_transient_uniform'], _ = generate_mc_ablation_cam_transient(events, class_idx, lif_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="uniform")
     return cams
 
 # ============================================================================
@@ -393,6 +401,7 @@ def main():
         "in_channels": C,
         "spiking_neuron": spiking_neuron,
         "pretrained": False,
+        "readout": args.readout,
         "detach_reset": False,
         "surrogate_function": surrogate.ATan(),
     }

@@ -9,7 +9,6 @@ from spikingjelly.activation_based import layer, neuron
 
 from models.spiking_vgg import custom_spiking_vgg11, custom_spiking_vgg11_bn, custom_spiking_vgg16_bn
 from models.sew_resnet import ResNetWrapper
-from models.simple_snn_voting import SimpleSNNVoting
 from models.simple_snn import SimpleSNN
 from models.simple_snn_composite import SimpleSNNComposite
 
@@ -18,18 +17,14 @@ model_to_name = {
     custom_spiking_vgg11_bn: "spiking_vgg11_bn",
     custom_spiking_vgg16_bn: "spiking_vgg16_bn",
     sew_resnet34: "sew_resnet34",
-    sew_resnet34: "sew_resnet34_spiking",
-    SimpleSNNVoting: "simple_snn_voting",
     SimpleSNN: "simple_snn",
     SimpleSNNComposite: "simple_snn_composite",
-    partial(SimpleSNN, have_last_spiking_neuron=False): "simple_snn_no_last_spiking",
-    partial(SimpleSNNComposite, have_last_spiking_neuron=False): "simple_snn_composite_no_last_spiking",
 }
 
 name_to_model = {v: k for k, v in model_to_name.items()}
 AVAILABLE_MODELS = list(name_to_model.keys())
 
-def get_model(model_name, num_classes, in_channels, spiking_neuron, pretrained=False, **kwargs):
+def get_model(model_name, num_classes, in_channels, spiking_neuron, pretrained=False, readout="direct", **kwargs):
     ModelClass: Type[nn.Module] = get_model_class(model_name)
 
     norm_layer = partial(ThresholdDependentBatchNorm2d, alpha=1.0, v_th=1.0)
@@ -39,12 +34,13 @@ def get_model(model_name, num_classes, in_channels, spiking_neuron, pretrained=F
             num_classes=num_classes,
             in_channels=in_channels,
             spiking_neuron=spiking_neuron,
+            readout=readout,
             **kwargs
         )
 
     elif "resnet" in model_name:
         def _filter_wrapper_kwargs(kwargs):
-            exclude = {'pretrained', 'cnf', 'spiking_neuron'}
+            exclude = {'pretrained', 'cnf', 'spiking_neuron', 'readout'}
             return {k: v for k, v in kwargs.items() if k not in exclude}
         wrapper_kwargs = _filter_wrapper_kwargs(kwargs)
 
@@ -60,7 +56,7 @@ def get_model(model_name, num_classes, in_channels, spiking_neuron, pretrained=F
         if "spiking" not in model_name:
             spiking_neuron = None
 
-        model = ResNetWrapper(model=base_model, spiking_neuron=spiking_neuron, in_channels=in_channels, **wrapper_kwargs)
+        model = ResNetWrapper(model=base_model, spiking_neuron=spiking_neuron, in_channels=in_channels, readout=readout, **wrapper_kwargs)
     
     elif "vgg" in model_name:
         model = ModelClass(
@@ -69,6 +65,7 @@ def get_model(model_name, num_classes, in_channels, spiking_neuron, pretrained=F
             spiking_neuron=spiking_neuron,
             pretrained=pretrained,
             norm_layer=norm_layer,
+            readout=readout,
             **kwargs
         )
 

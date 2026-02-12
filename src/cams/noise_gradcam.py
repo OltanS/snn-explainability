@@ -5,14 +5,16 @@ from typing import Optional, Union, List
 
 from spikingjelly.activation_based import functional, layer
 from src.cams.base_temporal_cam import BaseTemporalCAM
+from src.cams.cam_utils import mask_border_pixels
 from src.noisy_node import noise_injection
 
 class SNNNoiseGradCAM(BaseTemporalCAM):
-    def __init__(self, model: nn.Module, target_layer: nn.Module, k_trials: int = 100, batch_size: int = 16, noise_type: str = "surrogate"):
+    def __init__(self, model: nn.Module, target_layer: nn.Module, k_trials: int = 100, batch_size: int = 16, noise_type: str = "surrogate", mask_borders: bool = True):
         super().__init__(model, target_layer)
         self.k_trials = k_trials
         self.batch_size = batch_size
         self.noise_type = noise_type
+        self.mask_borders = mask_borders
 
     def _compute_raw(self, x: torch.Tensor, class_idx: Optional[int]) -> torch.Tensor:
         acts = None
@@ -86,9 +88,7 @@ class SNNNoiseGradCAM(BaseTemporalCAM):
                     # Compute CAMs for this batch of trials immediately
                     # w: (T, k, B, C) -> (T, k, B, C, 1, 1)
                     # a: (T, k, B, C, H, W)
-                    batch_cams = (w.unsqueeze(-1).unsqueeze(-1) * a).sum(dim=3)
-                    batch_cams = F.relu(batch_cams) # Apply ReLU per trial
-                    
+                    batch_cams = (w.unsqueeze(-1).unsqueeze(-1) * a).sum(dim=3)                    
                     # Sum over k to accumulate
                     batch_cams_sum = batch_cams.sum(dim=1) # (T, B, H, W)
                     
@@ -108,6 +108,9 @@ class SNNNoiseGradCAM(BaseTemporalCAM):
 
         # Average
         avg_cams = sum_cams / self.k_trials
+        avg_cams = F.relu(avg_cams)
+        # if self.mask_borders:
+        #     avg_cams = mask_border_pixels(avg_cams, border_widths=self.target_layer.padding)
         avg_cams = avg_cams.permute(1, 0, 2, 3) # (B, T, Hf, Wf)
         return avg_cams
     
@@ -174,7 +177,6 @@ class SNNNoiseGradCAM(BaseTemporalCAM):
                     
                     # Compute CAMs for this batch
                     batch_cams = (w.unsqueeze(-1).unsqueeze(-1) * a).sum(dim=3)
-                    batch_cams = F.relu(batch_cams)
                     
                     # Sum over k
                     batch_cams_sum = batch_cams.sum(dim=1)
@@ -195,6 +197,7 @@ class SNNNoiseGradCAM(BaseTemporalCAM):
                 # Checkpoint
                 if trials_run >= next_check or trials_run == self.k_trials:
                     avg_cams = sum_cams / trials_run
+                    avg_cams = F.relu(avg_cams)
                     # Permute to (B, T, H, W)
                     res = avg_cams.permute(1, 0, 2, 3).cpu()
                     results[trials_run] = res

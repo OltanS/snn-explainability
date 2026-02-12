@@ -1,5 +1,6 @@
 import torch
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import numpy as np
 
 def plot_frames(frames):
@@ -78,7 +79,6 @@ def plot_aggregated_cam(frames, cams, **kwargs):
     return plot_cam_time_series(
         frames=first,
         cams=cams_1t,
-        per_frame_cam_norm=False,
         frame_stride=1,
         max_frames=1,
         show=kwargs.get("show", True),
@@ -101,65 +101,97 @@ def _to_numpy(frames):
         f = f[0]
     return f
 
-def _norm_frames(frames_np):
-    T, C, _, _ = frames_np.shape
-    flat = frames_np.reshape(T, C, -1)
-    fmin = flat.min(axis=2).reshape(T, C, 1, 1)
-    fmax = flat.max(axis=2).reshape(T, C, 1, 1)
-    return ((frames_np - fmin) / (fmax - fmin + 1e-8)).clip(0, 1)
 
-def _norm_cams(cams_np, per_frame=True):
-    if per_frame:
-        out = np.empty_like(cams_np, dtype=np.float32)
-        for t in range(cams_np.shape[0]):
-            m, M = cams_np[t].min(), cams_np[t].max()
-            out[t] = (cams_np[t] - m) / (M - m + 1e-8) if M > m else 0.0
-        return out
-    m, M = cams_np.min(), cams_np.max()
-    return (cams_np - m) / (M - m + 1e-8) if M > m else np.zeros_like(cams_np, dtype=np.float32)
+def denormalize(tensor):
+    """Un-normalize ImageNet-like tensors/arrays for display.
+
+    Works with torch.Tensor or numpy.ndarray. Assumes the last two dimensions
+    are (H, W) and the channel dimension is at -3. Returns the result with the
+    same type and shape as the input.
+    """
+    is_torch = isinstance(tensor, torch.Tensor)
+
+    if is_torch:
+        x = tensor.detach()
+        # operate on CPU to simplify broadcasting / numpy-like behavior
+        if x.device.type != "cpu":
+            x = x.cpu()
+        dtype = x.dtype
+        C = x.size(-3)
+        if C not in (1, 3):
+            return x
+        mean = torch.tensor([0.485, 0.456, 0.406], dtype=dtype)
+        std = torch.tensor([0.229, 0.224, 0.225], dtype=dtype)
+        if C == 1:
+            mean = mean[[0]]
+            std = std[[0]]
+        # build broadcastable shape: [1,...,C,1,1] matching x.ndim
+        shape = [1] * x.dim()
+        shape[-3] = C
+        mean = mean.view(*shape)
+        std = std.view(*shape)
+        return std * x + mean
+
+    # numpy path
+    arr = np.asarray(tensor)
+    C = arr.shape[-3] if arr.ndim >= 3 else 1
+    if C not in (1, 3):
+        return arr
+    dtype = arr.dtype
+    mean = np.array([0.485, 0.456, 0.406], dtype=dtype)
+    std = np.array([0.229, 0.224, 0.225], dtype=dtype)
+    if C == 1:
+        mean = mean[[0]]
+        std = std[[0]]
+    # reshape for broadcasting
+    shape = [1] * arr.ndim
+    shape[-3] = C
+    mean = mean.reshape(shape)
+    std = std.reshape(shape)
+    return std * arr + mean
 
 def plot_cam_time_series(
     frames,
     cams,
-    aggregate="mean",
     frame_stride=1,
     max_frames=24,
     overlay_alpha=0.3,
     cmap="jet",
     figsize=(14, 6),
-    per_frame_cam_norm=True,
     show=True,
     save_path=None,
-    image_rows=1,           # new: number of rows for the image grid
-    images_per_row=None,    # new: optionally fix number of images per row
+    image_rows=1,           # number of rows for the image grid
+    images_per_row=None,    # optionally fix number of images per row
+    show_colorbar=False,     # show colorbar legend for CAM values
+    colorbar_fraction=0.04, # fraction width of colorbar
+    colorbar_pad=0.02,      # pad between plot and colorbar
 ):
     # frames: (T,C,H,W) or (1,T,C,H,W); cams: (T,H,W)
     frames_np = _to_numpy(frames)
     assert frames_np.ndim == 4
     T, C, H, W = frames_np.shape
 
-    cams_np = cams.detach().cpu().numpy().astype(np.float32) if isinstance(cams, torch.Tensor) else np.asarray(cams, dtype=np.float32)
+    denormalized = False
+    if C == 3 and frames_np.min() < 0:
+        frames_np = denormalize(torch.from_numpy(frames_np)).numpy()
+        denormalized = True
+
+    cams_np = (
+        cams.detach().cpu().numpy().astype(np.float32)
+        if isinstance(cams, torch.Tensor)
+        else np.asarray(cams, dtype=np.float32)
+    )
     assert cams_np.shape[0] == T
 
-    frames_vis = _norm_frames(frames_np)
+    frames_vis = frames_np
 
-    flatc = cams_np.reshape(T, -1)
-    if callable(aggregate):
-        cam_weights = np.asarray(aggregate(cams_np), dtype=float)
-    else:
-        if aggregate == "mean":
-            cam_weights = flatc.mean(axis=1)
-        elif aggregate == "max":
-            cam_weights = flatc.max(axis=1)
-        else:
-            raise ValueError("Unknown aggregate.")
+    # Select which timesteps to show
     indices = list(range(0, T, frame_stride))
     if len(indices) > max_frames:
         sel = np.linspace(0, len(indices) - 1, max_frames).round().astype(int)
         indices = [indices[i] for i in sel]
 
-    cam_show = _norm_cams(cams_np, per_frame_cam_norm)
-
+    cam_show = cams_np
     n_frames = len(indices)
 
     # Determine grid layout
@@ -175,20 +207,17 @@ def plot_cam_time_series(
     if auto_figsize:
         per_col_w = 3.0   # width (inches) per image column
         per_row_h = 3.0   # height (inches) per image row
-        ts_h = 2.0        # time-series height
         fig_w = max(6.0, cols * per_col_w)
-        fig_h = rows * per_row_h + ts_h
+        fig_h = rows * per_row_h
         figsize = (fig_w, fig_h)
 
-    fig = plt.figure(figsize=figsize)
-
-    # Outer grid: top = images grid, bottom = time-series
-    outer = fig.add_gridspec(2, 1, height_ratios=[max(1, rows) * 5, 1])
-    grid = outer[0].subgridspec(rows, cols)
+    fig, axes = plt.subplots(rows, cols, figsize=figsize)
+    fig.suptitle("CAM overlaid on input frames" + (" (denormalized)" if denormalized else ""), y=0.98)
+    axes = np.atleast_2d(axes)
 
     for ci, t in enumerate(indices):
         r, c = divmod(ci, cols)
-        ax = fig.add_subplot(grid[r, c])
+        ax = axes[r, c]
         frame = frames_vis[t]
         if C == 1:
             ax.imshow(frame[0], cmap="gray", interpolation="nearest")
@@ -198,15 +227,25 @@ def plot_cam_time_series(
         ax.set_title(f"t={t}")
         ax.axis("off")
 
-    ax_ts = fig.add_subplot(outer[1])
-    ax_ts.plot(range(T), cam_weights, color="tab:red")
-    ax_ts.scatter(indices, cam_weights[indices], color="black", s=14, zorder=3)
-    ax_ts.set_xlim(0, T - 1)
-    ax_ts.set_xlabel("Time")
-    ax_ts.set_ylabel("CAM")
-    ax_ts.grid(alpha=0.25)
+    # Hide any unused subplots
+    total_slots = rows * cols
+    for ci in range(n_frames, total_slots):
+        r, c = divmod(ci, cols)
+        axes[r, c].axis("off")
 
-    fig.tight_layout()
+    # Add a single colorbar for the CAMs if requested
+    if show_colorbar:
+        vmin = float(cam_show.min())
+        vmax = float(cam_show.max())
+        mappable = mpl.cm.ScalarMappable(cmap=cmap, norm=mpl.colors.Normalize(vmin=vmin, vmax=vmax))
+        mappable.set_array(cam_show)
+        # Place colorbar to the right of all axes
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        divider = make_axes_locatable(axes[0, -1])
+        cax = divider.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(mappable, cax=cax, orientation='vertical', label='CAM')
+
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
     if save_path:
         fig.savefig(save_path, dpi=180, bbox_inches="tight")
     if show:

@@ -1,3 +1,4 @@
+import math
 import torch.nn as nn
 from copy import deepcopy
 from spikingjelly.activation_based import layer
@@ -6,14 +7,38 @@ from spikingjelly.activation_based.model.spiking_vgg import (
 )
 
 
+def _voting_size(num_classes, s0=20, s1=400):
+    """Compute voting size for VotingLayer based on number of classes."""
+    if num_classes <= s0:
+        return 10
+    elif num_classes >= s1:
+        return 1
+    else:
+        return math.ceil(1 + 9 * (s1 - num_classes) / (s1 - s0))
+
+
 class CustomSpikingVGG(SpikingVGG):
-    """SpikingVGG with custom input channels."""
+    """SpikingVGG with custom input channels and configurable readout."""
     
     def __init__(self, cfg, batch_norm=False, norm_layer=None, num_classes=1000, 
-                 init_weights=True, spiking_neuron=None, in_channels=3, **kwargs):
+                 init_weights=True, spiking_neuron=None, in_channels=3, readout="direct", **kwargs):
         self.in_channels = in_channels
-        super().__init__(cfg, batch_norm, norm_layer, num_classes, init_weights, 
-                        spiking_neuron, **kwargs)
+        self.readout = readout
+        super().__init__(cfg, batch_norm, norm_layer, num_classes, init_weights, spiking_neuron, **kwargs)
+
+        if self.readout == "spiking":
+            self.classifier = nn.Sequential(
+                *list(self.classifier.children()),
+                spiking_neuron(**deepcopy(kwargs))
+            )
+        elif self.readout == "voting":
+            v = _voting_size(num_classes)
+            # Replace last Linear with one outputting num_classes * v, then spiking + VotingLayer
+            children = list(self.classifier.children())
+            children[-1] = layer.Linear(4096, num_classes * v)
+            children.append(spiking_neuron(**deepcopy(kwargs)))
+            children.append(layer.VotingLayer(voting_size=v))
+            self.classifier = nn.Sequential(*children)
 
     def make_layers(self, cfg, batch_norm=False, norm_layer=None, neuron=None, **kwargs):
         """Modified make_layers that uses custom in_channels."""
@@ -25,7 +50,7 @@ class CustomSpikingVGG(SpikingVGG):
             if v == 'M':
                 layers += [layer.MaxPool2d(kernel_size=2, stride=2)]
             else:
-                conv2d = layer.Conv2d(in_channels, v, kernel_size=3, padding=1)
+                conv2d = layer.Conv2d(in_channels, v, kernel_size=3, padding=1, padding_mode="reflect")
                 if batch_norm:
                     layers += [conv2d, norm_layer(num_features=v), neuron(**deepcopy(kwargs))]
                 else:
@@ -52,40 +77,9 @@ def _custom_spiking_vgg(arch, cfg, batch_norm, pretrained, progress, norm_layer=
     )
     
     if pretrained:
-        state_dict = load_state_dict_from_url(model_urls[arch], progress=progress)
-
-        # Load weights, instantiating incompatible first conv when in_channels doesn't match
-        if in_channels != 3:
-            # drop pretrained first conv weights
-            state_dict = {k: v for k, v in state_dict.items() 
-                         if not k.startswith('features.0.weight')}
-
-            # initialize the model's first conv to appropriate random init
-            first_layer = model.features[0]
-            if hasattr(first_layer, 'weight') and first_layer.weight is not None:
-                nn.init.kaiming_normal_(first_layer.weight, mode='fan_out', nonlinearity='relu')
-            if hasattr(first_layer, 'bias') and first_layer.bias is not None:
-                nn.init.constant_(first_layer.bias, 0)
-
-        # ignore / reinitialize last classifier layer if num_classes doesn't match
-        last_idx = len(model.classifier) - 1
-        if model.classifier[last_idx].out_features != 1000:
-            # drop pretrained final classifier weights/bias
-            state_dict = {k: v for k, v in state_dict.items() 
-                         if not k.startswith(f'classifier.{last_idx}.weight') and 
-                            not k.startswith(f'classifier.{last_idx}.bias')}
-
-            # reinitialize final classifier layer
-            final_layer = model.classifier[last_idx]
-            if hasattr(final_layer, 'weight') and final_layer.weight is not None:
-                nn.init.normal_(final_layer.weight, 0, 0.01)
-            if hasattr(final_layer, 'bias') and final_layer.bias is not None:
-                nn.init.constant_(final_layer.bias, 0)
-
-        model.load_state_dict(state_dict, strict=False)
+        raise NotImplementedError("Pretrained weights for custom input channels are not available, as they are meant for 3 input channels and 100+ timesteps.")
 
     return model
-
 
 def custom_spiking_vgg11(pretrained=False, progress=True, spiking_neuron=None, 
                          in_channels=3, **kwargs):

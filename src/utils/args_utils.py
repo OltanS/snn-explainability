@@ -1,5 +1,6 @@
 import argparse
 import os
+from random import randint
 
 from src.utils.model_utils import AVAILABLE_MODELS
 from src.utils.data_utils import AVAILABLE_DATASETS
@@ -23,6 +24,7 @@ def parse_args():
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay")
     parser.add_argument("--neuron_type", type=str, default="lif", choices=["lif", "if"], help="Type of spiking neuron model")
     parser.add_argument("--tau", type=float, default=2.0, help="Membrane time constant tau")
+    parser.add_argument("--readout", type=str, default="direct", choices=["direct", "spiking", "voting"], help="Last-layer readout type: direct (no final neuron), spiking (through spiking neuron), or voting (VotingLayer)")
     parser.add_argument("--loss", type=str, default="ce", choices=["mse", "ce", "bce"], help="Loss function")
     parser.add_argument("--label_smoothing", type=float, default=0.1, help="Label smoothing for cross-entropy loss")
     parser.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "sgd"], help="Optimizer")
@@ -31,10 +33,10 @@ def parse_args():
     parser.add_argument("--num_workers", type=int, default=4, help="Number of data loading workers")
     parser.add_argument("--save_every", type=int, default=30, help="Save checkpoint every N epochs")
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--seed", type=int, default=randint(0, 10000), help="Random seed")
     
     # CAM / Evaluation specific
-    parser.add_argument("--cam_methods", nargs="+", default=['grad', 'ablation', 'noise_grad_surrogate', 'noise_grad_uniform', 'noise_grad_gaussian', 'sam', 'random'], help="CAM methods to evaluate")
+    parser.add_argument("--cam_methods", nargs="+", default=['grad', 'ablation', 'smooth_grad', 'sam', 'random'], help="CAM methods to evaluate")
     parser.add_argument("--max_samples", type=int, default=200, help="Max samples to process in CAM comparison")
     parser.add_argument("--top_percent", type=float, default=0.2, help="Percentage of pixels to keep for masking")
     parser.add_argument("--target_layers", nargs="+", type=int, default=[3, 5, 7], help="Indices of layers to evaluate (same index used for Conv and (L)IF)")

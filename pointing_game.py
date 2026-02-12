@@ -36,6 +36,7 @@ from src.cams.generation_utils import (
     generate_mc_ablation_cam, 
     generate_sam, 
     generate_noise_grad_cam,
+    generate_mc_ablation_cam_transient,
 )
 
 # ============================================================================
@@ -95,6 +96,10 @@ def generate_all_cams(model, events, class_idx, conv_idx, lif_idx, args):
         cams['noise_grad_uniform'] = generate_noise_grad_cam(events, class_idx, conv_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="uniform")
     if 'noise_grad_gaussian' in args.cam_methods:
         cams['noise_grad_gaussian'] = generate_noise_grad_cam(events, class_idx, conv_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="gaussian")
+    if 'mc_ablation_transient_surrogate' in args.cam_methods:
+        cams['mc_ablation_transient_surrogate'], _ = generate_mc_ablation_cam_transient(events, class_idx, lif_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="surrogate")
+    if 'mc_ablation_transient_uniform' in args.cam_methods:
+        cams['mc_ablation_transient_uniform'], _ = generate_mc_ablation_cam_transient(events, class_idx, lif_idx, model, k_trials=args.k_trials, batch_size=args.channel_batch_size, noise_type="uniform")
     if 'random' in args.cam_methods:
         cams['random'] = generate_random_cam(events)
     
@@ -350,6 +355,7 @@ def main():
         in_channels=3,
         spiking_neuron=spiking_neuron,
         pretrained=False,
+        readout=args.readout,
         detach_reset=False,
         surrogate_function=surrogate.ATan(),
     )

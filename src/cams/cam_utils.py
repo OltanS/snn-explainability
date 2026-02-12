@@ -5,21 +5,20 @@ from typing import Tuple
 from contextlib import contextmanager
 from spikingjelly.activation_based import layer, functional, neuron
 
-def normalize_per_timestep(cams: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    # Accept (B,T,H,W) or (T,H,W)
-    squeeze = False
-    if cams.dim() == 3:
-        cams = cams.unsqueeze(0)
-        squeeze = True
+def normalize_per_timestep(cams: torch.Tensor, eps: float = 1e-6, q: float = 99.0) -> torch.Tensor:
+
     B, T, H, W = cams.shape
     flat = cams.view(B, T, -1)
-    mins = flat.min(dim=-1).values.view(B, T, 1, 1)
-    maxs = flat.max(dim=-1).values.view(B, T, 1, 1)
-    denom = (maxs - mins).clamp_min(eps)
-    out = ((cams - mins) / denom).clamp(0, 1)
-    if squeeze:
-        out = out.squeeze(0)
-    return out
+
+    # lower/upper percentiles per (B,T)
+    lo = torch.quantile(flat, (100.0 - q) / 100.0, dim=-1, keepdim=True)
+    hi = torch.quantile(flat, q / 100.0, dim=-1, keepdim=True)
+    lo = lo.view(B, T, 1, 1)
+    hi = hi.view(B, T, 1, 1)
+
+    cams = (cams - lo) / (hi - lo + eps)
+
+    return cams.clamp(0.0, 1.0)
 
 def upsample_cams(cams: torch.Tensor, target_hw: Tuple[int, int]) -> torch.Tensor:
     # Accept (B,T,H,W) or (T,H,W)
@@ -69,3 +68,27 @@ def grad_cam_context(model: nn.Module):
                 p.requires_grad = req_grad
         model.train(prev_training)
         functional.reset_net(model)
+
+def mask_border_pixels(cams: torch.Tensor, border_widths: Tuple[int, int] = (1, 1)) -> torch.Tensor:
+    """
+    Zeroes out the spatial borders of the CAM to remove padding artifacts.
+    Assumes cams shape is (..., H, W).
+    border_widths: (pad_h, pad_w) matching PyTorch Conv2d padding tuple format.
+    """
+    pad_h, pad_w = border_widths
+    
+    if pad_h <= 0 and pad_w <= 0:
+        return cams
+    
+    H, W = cams.shape[-2], cams.shape[-1]
+    
+    # Mask Height (Top/Bottom)
+    if pad_h > 0 and H > 2 * pad_h:
+        cams[..., :pad_h, :] = 0
+        cams[..., -pad_h:, :] = 0
+            
+    # Mask Width (Left/Right)
+    if pad_w > 0 and W > 2 * pad_w:
+        cams[..., :, :pad_w] = 0
+        cams[..., :, -pad_w:] = 0
+    return cams
