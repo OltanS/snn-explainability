@@ -1,19 +1,33 @@
-### SCORECAM
-Apply scorecam, compare outputs to "cumulative membrane potential" for class in next timestep, as its version of "logits"
+# Attribution for spiking neural networks
 
-### TODO
-- Unpack imagenet and ucf
-- Figure out why vgg isn't working, fix it.
+Code for *Continuous Attribution on Discrete Spikes: Revealing the Explainability
+Paradox in Spiking Neural Networks*, Neuromorphic Computing and Engineering, 2026
+([DOI](https://doi.org/10.1088/2634-4386/aeae68)).
 
-Ideas:
-- Check to see if VGG works without BPTT
+Implements class activation maps for SNNs built with SpikingJelly, including
+Grad-CAM, AblationCAM, SAM and SmoothGrad with Gaussian and Poisson noise.
 
-### PAST
-- Get "cumulative membrane potential over time" from forward function, and its deltas DONE
-- Get scorecam working DONE
-- Save/load the model to enable inference time cam-ing. DONE
-- Script for training the model DONE
-- Begin working with the model during inference to ensure all is as intended, one pic at a time. DONE
+## Layout
 
-- Add BPTT to basic_snn, see if it breaks it. -> Seems to work OK, but not helpful. Perhaps BPTT not great for truly neuromorphic data, and many BPTT's cause issues?
-- Pool before, instead of after -> Seems to work OK
+```
+train_model_ddp.py   train a model
+compare_cams.py      compare attribution methods
+pointing_game.py     pointing game evaluation
+models/              network definitions
+src/cams/            attribution methods
+src/utils/           data, training and CLI helpers
+notebooks/           analysis notebooks
+```
+
+## Usage
+
+```bash
+pip install -r requirements.txt
+
+torchrun --nproc_per_node=gpu train_model_ddp.py \
+    --model_name spiking_vgg11_bn --dataset_name dvs_gesture
+torchrun --nproc_per_node=1 compare_cams.py \
+    --model_name spiking_vgg11_bn --dataset_name dvs_gesture
+```
+
+All scripts share the arguments in `src/utils/args_utils.py`.
