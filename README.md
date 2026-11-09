@@ -31,3 +31,7 @@ torchrun --nproc_per_node=1 compare_cams.py \
 ```
 
 All scripts share the arguments in `src/utils/args_utils.py`.
+
+## License
+
+MIT
